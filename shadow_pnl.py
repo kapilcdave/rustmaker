@@ -84,7 +84,41 @@ def summary(x):
 
 
 print(f"settled fills {len(f):,} over {f.ticker.nunique()} markets")
+
+# Queue split (tapes from 2026-09-24 on): settlement P&L of each fill, s*(price - 100y), is
+# additive, so a split by queue ahead at the fill sums back to the strategy total.
+if "q_fill" in f.columns and f.q_fill.notna().any():
+    f["settle_c"] = s * (f.price - 100 * f.y) * f.ct
+    f["q_b"] = pd.cut(pd.to_numeric(f.q_fill), [-1, 0, 10, 50, 250, 1000, 1e12],
+                      labels=["0", "1-10", "11-50", "51-250", "251-1k", ">1k"])
+    g = f.groupby(["strat", "q_b"], observed=True)
+    qt = g.agg(ct=("ct", "sum"), settle_c=("settle_c", "sum"), mk5s=("mk5s", "mean"), mkts=("ticker", "nunique"))
+    qt["c_per_ct"] = qt.settle_c / qt.ct
+    print("\n== by queue ahead at fill (contracts) ==")
+    print(qt.round(3).to_string())
+    # Prereg rule 1: small-queue (q_fill <= 50) minus deep-queue (> 250) c/ct, per market, on
+    # markets that have both, so the SE is clustered by market.
+    qf = pd.to_numeric(f.q_fill)
+    for st, g in f.groupby("strat"):
+        g = g.assign(grp=np.where(qf[g.index] <= 50, "small", np.where(qf[g.index] > 250, "deep", "")))
+        per = g[g.grp != ""].groupby(["ticker", "grp"]).apply(lambda x: x.settle_c.sum() / x.ct.sum(), include_groups=False).unstack()
+        per = per.dropna()
+        if len(per) > 1:
+            d = per["small"] - per["deep"]
+            se = d.std(ddof=1) / np.sqrt(len(d))
+            print(f"rule1 {st:15s} mkts {len(d):4d}  small-deep {d.mean():+7.3f} c/ct  se {se:6.3f}  t {d.mean() / se:+5.2f}")
 print("\n== by strategy ==")
 print(m.groupby("strat").apply(summary, include_groups=False).round(3).T.to_string())
 print("\n== by strategy x series ==")
 print(m.groupby(["strat", "series"]).apply(summary, include_groups=False)[["markets", "contracts", "total_$", "c_per_ct", "c_per_market_se", "mk60s_c_per_ct"]].round(3).to_string())
+
+# Prereg rule 2: each arm vs gate_pr on the same markets (paired by market).
+if "gate_pr" in m.strat.unique():
+    base = m[m.strat == "gate_pr"].set_index("ticker").total_c
+    print("\n== paired vs gate_pr (c/market) ==")
+    for st in sorted(set(m.strat) - {"gate_pr"}):
+        arm = m[m.strat == st].set_index("ticker").total_c
+        idx = base.index.union(arm.index)
+        d = arm.reindex(idx, fill_value=0) - base.reindex(idx, fill_value=0)
+        se = d.std(ddof=1) / np.sqrt(len(d))
+        print(f"{st:15s} mkts {len(d):4d}  diff {d.mean():+8.2f} se {se:6.2f}  t {d.mean() / se:+5.2f}")
