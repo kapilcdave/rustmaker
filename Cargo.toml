@@ -1,0 +1,24 @@
+[package]
+name = "kalshi-mm15"
+version = "0.1.0"
+edition = "2024"
+description = "Kalshi 15M crypto market-making: read-only competitiveness probe first"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+flate2 = "1.0"
+futures-util = "0.3"
+ring = "0.17"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+rsa = { version = "0.9", features = ["pem", "sha2"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = { version = "0.10", features = ["oid"] }
+tokio = { version = "1.47", features = ["macros", "net", "rt", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
