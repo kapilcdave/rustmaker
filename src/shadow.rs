@@ -55,6 +55,7 @@ pub struct Params {
     pub tick: i64,
     /// `front` arms post only where the displayed level at our price is at most this.
     pub max_join_fp: i64,
+    pub series: Vec<String>,
 }
 
 impl Default for Params {
@@ -74,6 +75,7 @@ impl Default for Params {
             bucket: 900.0,
             tick: 100,
             max_join_fp: 50 * SIZE_SCALE,
+            series: Vec::new(),
         }
     }
 }
@@ -172,6 +174,8 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
     let now0 = unix_us();
     // (name, gate, amend, prorata, improve, front). gate/gate_pr reproduce shadow v1-v3.
     let mut strategies: Vec<Strategy> = [
+        // nogate_pr: the ungated seat, the baseline every gate must beat (PREREG_commodities.md).
+        ("nogate_pr", false, false, true, false, false),
         ("gate", true, false, false, false, false),
         ("gate_pr", true, false, true, false, false),
         ("gate_pr_in", true, false, true, true, false),
@@ -186,7 +190,7 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
         .collect();
 
     let (disc_tx, mut disc_rx) = mpsc::channel(256);
-    let disc = tokio::spawn(discover(disc_tx));
+    let disc = tokio::spawn(discover(disc_tx, p.series.clone()));
     let started = Instant::now();
     let deadline = started + Duration::from_secs(minutes * 60);
     let mut markets: HashMap<String, Mkt> = HashMap::new();

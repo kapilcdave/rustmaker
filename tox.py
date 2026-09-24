@@ -1,4 +1,4 @@
-"""Toxic-flow table for Kalshi 15M crypto, from a kalshi-mm15 probe tape.
+"""Toxic-flow table for Kalshi 15M markets (crypto or commodities), from a kalshi-mm15 probe tape.
 
 Every print is a maker fill for somebody. For each one:
     s = +1 if the taker bought YES (the maker SOLD yes at P), -1 if the taker sold YES
@@ -12,7 +12,8 @@ Usage: python3 tox.py tape.csv.gz
 import json
 import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -24,10 +25,10 @@ REST = "https://external-api.kalshi.com/trade-api/v2"
 
 
 def close_utc(ticker):
-    # KXBTC15M-26SEP230215-15: the embedded time is the close, in US Eastern (EDT = UTC-4 here).
+    # KXGOLD15M-26SEP240215-15: the embedded time is the close, in US Eastern (DST-aware).
     stamp = ticker.split("-")[1]
-    t = datetime.strptime(stamp, "%y%b%d%H%M").replace(tzinfo=timezone.utc)
-    return int((t + timedelta(hours=4)).timestamp() * 1e6)
+    t = datetime.strptime(stamp, "%y%b%d%H%M").replace(tzinfo=ZoneInfo("America/New_York"))
+    return int(t.astimezone(timezone.utc).timestamp() * 1e6)
 
 
 def results(tickers):

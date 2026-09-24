@@ -1,4 +1,4 @@
-//! Read-only competitiveness probe for Kalshi 15M crypto. Places NO orders.
+//! Read-only competitiveness probe for Kalshi 15M commodities (port of the 15M crypto probe). Places NO orders.
 //!
 //!   kalshi-mm15 probe --out data --minutes 60 [--dump 20]
 //!   kalshi-mm15 rtt --n 300
@@ -54,10 +54,16 @@ fn rest_base() -> String {
 fn ws_url() -> String {
     env::var("KALSHI_WS").unwrap_or_else(|_| WS_DEFAULT.into())
 }
-const SERIES: [&str; 9] = [
-    "KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M", "KXDOGE15M", "KXHYPE15M", "KXBNB15M",
-    "KXZEC15M", "KXNEAR15M",
-];
+/// Kalshi 15M commodities. Same structure as 15M crypto: one up/down market per series per
+/// quarter hour, ticker time in US Eastern, fee_type quadratic (checked 2026-09-24).
+const SERIES: [&str; 5] = ["KXGOLD15M", "KXSILVER15M", "KXWTI15M", "KXCOPPER15M", "KXNATGAS15M"];
+
+fn series_arg(flag: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    flag("--series").map_or_else(
+        || SERIES.iter().map(|s| s.to_string()).collect(),
+        |v| v.split(',').map(str::to_owned).collect(),
+    )
+}
 /// Same-side prints this close together are one taker sweep.
 const BURST_US: i64 = 50_000;
 /// Thresholds (µs) at which to report "share of gaps longer than": a reaction that takes
@@ -79,7 +85,7 @@ async fn main() -> Result<()> {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
             let dump: usize = flag("--dump").map_or(Ok(0), |m| m.parse())?;
-            probe(out, minutes, dump).await
+            probe(out, minutes, dump, series_arg(&flag)).await
         }
         Some("get") => {
             // Signed read-only GET of one path, e.g. `get /account/limits`.
@@ -101,7 +107,8 @@ async fn main() -> Result<()> {
         Some("shadow") => {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/shadow".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
-            shadow::run(load_auth()?, out, minutes, shadow::Params::default()).await
+            let p = shadow::Params { series: series_arg(&flag), ..shadow::Params::default() };
+            shadow::run(load_auth()?, out, minutes, p).await
         }
         Some("live") => {
             // ARMED. Requires the explicit flag so it can never start by accident.
@@ -257,13 +264,13 @@ struct Discovered {
     close_unix_ms: i64,
 }
 
-async fn discover(tx: mpsc::Sender<Discovered>) -> Result<()> {
+async fn discover(tx: mpsc::Sender<Discovered>, series: Vec<String>) -> Result<()> {
     let http = client()?;
     let mut seen = HashSet::new();
     let mut tick = interval(Duration::from_secs(15));
     loop {
         tick.tick().await;
-        for series in SERIES {
+        for series in &series {
             let url = format!("{}/markets?series_ticker={series}&status=open&limit=20", rest_base());
             let body: Value = match http.get(&url).send().await {
                 Ok(r) => match r.json().await {
@@ -386,7 +393,7 @@ fn series_of(ticker: &str) -> String {
     ticker.split('-').next().unwrap_or(ticker).to_owned()
 }
 
-async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
+async fn probe(out: PathBuf, minutes: u64, mut dump: usize, series: Vec<String>) -> Result<()> {
     fs::create_dir_all(&out)?;
     let auth = load_auth()?;
     let stamp = unix_ms();
@@ -411,7 +418,7 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
     let mut dumped: HashMap<String, usize> = HashMap::new();
 
     let (disc_tx, mut disc_rx) = mpsc::channel(256);
-    let disc = tokio::spawn(discover(disc_tx));
+    let disc = tokio::spawn(discover(disc_tx, series));
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(minutes * 60);

@@ -122,3 +122,38 @@ if "gate_pr" in m.strat.unique():
         d = arm.reindex(idx, fill_value=0) - base.reindex(idx, fill_value=0)
         se = d.std(ddof=1) / np.sqrt(len(d))
         print(f"{st:15s} mkts {len(d):4d}  diff {d.mean():+8.2f} se {se:6.2f}  t {d.mean() / se:+5.2f}")
+
+
+# PREREG_commodities.md rules 1-2. Halves split on each market's close time (from its ticker).
+if "nogate_pr" in m.strat.unique():
+    from tox import close_utc
+    m["close_us"] = m.ticker.map(close_utc)
+    cut = m.drop_duplicates("ticker").close_us.median()
+    m["half"] = np.where(m.close_us <= cut, "H1", "H2")
+    base = m[m.strat == "nogate_pr"].set_index("ticker").total_c
+
+    def stat(x):
+        n = len(x)
+        mu = x.mean() if n else np.nan
+        se = x.std(ddof=1) / np.sqrt(n) if n > 1 else np.nan
+        return mu, se, n
+
+    print("\n== PREREG_commodities rule 1 (c/market; pass = lo95>0, both halves >0, gated beats nogate t>=2) ==")
+    for st in sorted(m.strat.unique()):
+        x = m[m.strat == st]
+        mu, se, n = stat(x.total_c)
+        h1 = x[x.half == "H1"].total_c.mean()
+        h2 = x[x.half == "H2"].total_c.mean()
+        ok = (mu - 1.96 * se > 0) and h1 > 0 and h2 > 0
+        vs = ""
+        if st != "nogate_pr":
+            arm = x.set_index("ticker").total_c
+            idx = base.index.union(arm.index)
+            d = arm.reindex(idx, fill_value=0) - base.reindex(idx, fill_value=0)
+            dm, dse, dn = stat(d)
+            t = dm / dse if dse and dse > 0 else np.nan
+            ok = ok and t >= 2
+            vs = f"  vs nogate {dm:+7.2f} se {dse:5.2f} t {t:+5.2f}"
+        print(f"{st:15s} mkts {n:4d}  {mu:+7.2f} ± {se:5.2f}  lo95 {mu - 1.96 * se:+7.2f}  H1 {h1:+7.2f}  H2 {h2:+7.2f}{vs}  {'PASS' if ok else 'fail'}")
+    print("\n== per series by half (EXPLORATORY, rule 4) ==")
+    print(m.groupby(["strat", "series", "half"]).total_c.agg(["count", "mean"]).unstack("half").round(2).to_string())
