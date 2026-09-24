@@ -35,3 +35,13 @@
 - Data: `penny5` markets that CLOSE after 2026-09-24T22:05Z, from the same running shadow (v6, unchanged).
 - Stop at 200 settled markets. Pass: lower 95% bound > 0. Else: mean ≤ 0 → closed; mean > 0 → report,
   no further extension of this rule.
+
+## Final scoring (shadow stopped 2026-09-24 22:10Z by the user, ~14 h, ~470 markets per strategy)
+- The confirmation window above received NO data (frozen 22:05Z, run stopped 22:10Z).
+- penny5: prereg first 200 +2.93 ± 2.06 (bound −1.11, inconclusive); markets 201+ under the unchanged
+  frozen rule +6.30 ± 2.11 (bound +2.16, n=237); whole run +4.76 ± 1.48 (bound +1.85), +$20.78 at 1 ct.
+- Controls: base −6.54 ± 1.97, penny2 −2.86 ± 2.03 over the whole run.
+- penny5 − base by quarter (same markets, same time): +19.4, +9.2, +6.5, +10.1 c/mkt.
+- Pairs +0.50 c/pair, mk60s +0.40 c/ct. Series: NEAR +14.6, DOGE +12.1 strongest; BTC −2.0, SOL −2.6.
+- Status: strongest evidence on this seat, not a clean prereg pass. The untested risk is competitor
+  re-pennying of a REAL quote; only a capped live run measures it.
