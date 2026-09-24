@@ -9,6 +9,7 @@
 mod auth;
 mod book;
 mod latency;
+mod live;
 mod shadow;
 mod stats;
 
@@ -100,7 +101,44 @@ async fn main() -> Result<()> {
         Some("shadow") => {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/shadow".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
-            shadow::run(load_auth()?, out, minutes, shadow::Params::default()).await
+            let p = shadow::Params {
+                series: flag("--series").map_or_else(
+                    || SERIES.iter().map(|s| s.to_string()).collect(),
+                    |v| v.split(',').map(str::to_owned).collect(),
+                ),
+                only_base: args.iter().any(|a| a == "--only-base"),
+                ..shadow::Params::default()
+            };
+            shadow::run(load_auth()?, out, minutes, p).await
+        }
+        Some("live") => {
+            // ARMED. Requires the explicit flag so it can never start by accident.
+            if !args.iter().any(|a| a == "--armed") {
+                bail!("live places REAL orders; pass --armed to confirm");
+            }
+            let num = |name: &str, default: f64| flag(name).map_or(Ok(default), |v| v.parse::<f64>());
+            let params = live::LiveParams {
+                series: flag("--series")
+                    .unwrap_or_else(|| "KXBTC15M,KXETH15M,KXXRP15M".into())
+                    .split(',')
+                    .map(str::to_owned)
+                    .collect(),
+                minutes: num("--minutes", 120.0)? as u64,
+                max_pos_fp: (num("--max-pos", 1.0)? * book::SIZE_SCALE as f64) as i64,
+                session_max_loss_c: num("--max-loss-c", 200.0)?,
+                cumulative_max_loss_c: num("--cum-max-loss-c", 300.0)?,
+                // Clip 1 and |pos| <= 1 already bound what a sweep can take; the group catches a
+                // runaway loop. 4 tripped on ordinary flow (5 fills / 6 s across 3 markets).
+                group_contracts_per_15s: num("--group-limit", 12.0)? as i64,
+                stop_before_close_s: 120,
+                mid_lo_c: 15.0,
+                mid_hi_c: 85.0,
+                mom_pull_c: 0.25,
+                thin_pull: 0.9213,
+                exchange_index: num("--exchange-index", 2.0)? as i64,
+                out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/live".into())),
+            };
+            live::run(load_auth()?, params).await
         }
         Some("latency") => {
             let n: usize = flag("--n").map_or(Ok(50), |m| m.parse())?;
@@ -227,13 +265,13 @@ struct Discovered {
     close_unix_ms: i64,
 }
 
-async fn discover(tx: mpsc::Sender<Discovered>) -> Result<()> {
+async fn discover(tx: mpsc::Sender<Discovered>, series: Vec<String>) -> Result<()> {
     let http = client()?;
     let mut seen = HashSet::new();
     let mut tick = interval(Duration::from_secs(15));
     loop {
         tick.tick().await;
-        for series in SERIES {
+        for series in &series {
             let url = format!("{}/markets?series_ticker={series}&status=open&limit=20", rest_base());
             let body: Value = match http.get(&url).send().await {
                 Ok(r) => match r.json().await {
@@ -381,7 +419,7 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
     let mut dumped: HashMap<String, usize> = HashMap::new();
 
     let (disc_tx, mut disc_rx) = mpsc::channel(256);
-    let disc = tokio::spawn(discover(disc_tx));
+    let disc = tokio::spawn(discover(disc_tx, SERIES.iter().map(|s| s.to_string()).collect()));
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(minutes * 60);

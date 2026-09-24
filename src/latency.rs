@@ -23,6 +23,8 @@ use crate::{
 };
 
 const BID_PRICE: &str = "0.0100";
+/// The amend leg moves the resting bid here: still far below any tradeable touch.
+const AMEND_PRICE: &str = "0.0200";
 /// Never place unless the best YES ask is at least this far away (fixed-point 1e-4 dollars).
 const MIN_ASK_FP: i64 = 500;
 const SERIES: &str = "KXBTC15M";
@@ -30,6 +32,7 @@ const SERIES: &str = "KXBTC15M";
 struct OwnDelta {
     client_order_id: String,
     positive: bool,
+    price_fp: i64,
     venue_us: i64,
     recv_us: i64,
 }
@@ -56,10 +59,12 @@ pub async fn run(auth: Auth, n: usize) -> Result<()> {
 
     let names = [
         "create.rtt", "create.to_book", "create.book_to_us",
+        "amend.rtt", "amend.to_book", "amend.book_to_us",
         "cancel.rtt", "cancel.to_book", "cancel.book_to_us",
     ];
     let mut s: HashMap<&str, Samples> = names.iter().map(|k| (*k, Samples::new(10_000))).collect();
-    let mut sent: HashMap<String, (i64, i64)> = HashMap::new(); // coid → (create_send, cancel_send)
+    // coid → (create_send, amend_send, cancel_send)
+    let mut sent: HashMap<String, (i64, i64, i64)> = HashMap::new();
     let mut resting: Vec<(String, String)> = Vec::new(); // (order_id, coid) not yet cancelled
     let mut skipped = 0;
 
@@ -99,6 +104,21 @@ pub async fn run(auth: Auth, n: usize) -> Result<()> {
         }
         resting.push((order_id.clone(), coid.clone()));
 
+        // Amend the price: the one-request requote. Its book change is a +1 at the new price.
+        let ta = unix_us();
+        let amend = json!({"ticker": ticker, "side": "bid", "price": AMEND_PRICE, "count": "1.00"});
+        match signed(&http, &auth, "POST", &format!("/portfolio/events/orders/{order_id}/amend"), Some(&amend)).await {
+            Ok(r) => {
+                s.get_mut("amend.rtt").unwrap().push(unix_us() - ta, 1.0);
+                if r["fill_count"].as_str().is_some_and(|f| f != "0.00") {
+                    eprintln!("FILLED on amend {i} ({r}); stopping");
+                    break;
+                }
+            }
+            Err(e) => eprintln!("amend {i} failed: {e:#}"),
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
         let t2 = unix_us();
         let path = format!("/portfolio/events/orders/{order_id}?market_ticker={ticker}");
         match signed(&http, &auth, "DELETE", &path, None).await {
@@ -108,7 +128,7 @@ pub async fn run(auth: Auth, n: usize) -> Result<()> {
             }
             Err(e) => eprintln!("cancel {i} failed: {e:#}"),
         }
-        sent.insert(coid, (t0, t2));
+        sent.insert(coid, (t0, ta, t2));
         // Basic tier: 100 write tokens/s, create 10 + cancel 2.
         tokio::time::sleep(Duration::from_millis(400)).await;
         while let Ok(d) = own_rx.try_recv() {
@@ -143,9 +163,16 @@ pub async fn run(auth: Auth, n: usize) -> Result<()> {
     Ok(())
 }
 
-fn record(s: &mut HashMap<&str, Samples>, sent: &HashMap<String, (i64, i64)>, d: OwnDelta) {
-    let Some((create_send, cancel_send)) = sent.get(&d.client_order_id) else { return };
-    let (leg, send) = if d.positive { ("create", *create_send) } else { ("cancel", *cancel_send) };
+fn record(s: &mut HashMap<&str, Samples>, sent: &HashMap<String, (i64, i64, i64)>, d: OwnDelta) {
+    let Some((create_send, amend_send, cancel_send)) = sent.get(&d.client_order_id) else { return };
+    // Book changes we cause, by leg: create = +1 @ BID_PRICE; amend = +1 @ AMEND_PRICE (and a −1
+    // @ BID_PRICE, ignored); cancel = −1 @ AMEND_PRICE.
+    let (leg, send) = match (d.positive, d.price_fp) {
+        (true, p) if p == 100 => ("create", *create_send),
+        (true, _) => ("amend", *amend_send),
+        (false, p) if p == 200 => ("cancel", *cancel_send),
+        _ => return,
+    };
     s.get_mut(format!("{leg}.to_book").as_str()).unwrap().push(d.venue_us - send, 1.0);
     s.get_mut(format!("{leg}.book_to_us").as_str()).unwrap().push(d.recv_us - d.venue_us, 1.0);
 }
@@ -180,7 +207,8 @@ async fn feed(
                     (m["client_order_id"].as_str(), m["ts"].as_str().and_then(rfc3339_us))
                 {
                     let positive = !m["delta_fp"].as_str().unwrap_or("").starts_with('-');
-                    let _ = own.send(OwnDelta { client_order_id: coid.into(), positive, venue_us: vt, recv_us });
+                    let price_fp = crate::book::parse_value(m.get("price_dollars"), crate::book::PRICE_SCALE).unwrap_or(-1);
+                    let _ = own.send(OwnDelta { client_order_id: coid.into(), positive, price_fp, venue_us: vt, recv_us });
                 }
             }
             _ => continue,
@@ -232,7 +260,7 @@ async fn signed(
     Ok(if text.is_empty() { Value::Null } else { serde_json::from_str(&text)? })
 }
 
-fn random_id() -> String {
+pub fn random_id() -> String {
     use ring::rand::{SecureRandom, SystemRandom};
     let mut b = [0u8; 16];
     SystemRandom::new().fill(&mut b).expect("rng");

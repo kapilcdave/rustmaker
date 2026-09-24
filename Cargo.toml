@@ -10,7 +10,7 @@ base64 = "0.22"
 flate2 = "1.0"
 futures-util = "0.3"
 ring = "0.17"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls-webpki-roots"] }
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
