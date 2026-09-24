@@ -137,6 +137,7 @@ async fn main() -> Result<()> {
                 thin_pull: 0.9213,
                 exchange_index: num("--exchange-index", 2.0)? as i64,
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/live".into())),
+                penny_room: num("--penny-room", 0.0)? as i64,
             };
             live::run(load_auth()?, params).await
         }

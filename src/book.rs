@@ -61,6 +61,20 @@ impl Book {
         levels.get(&price).copied().unwrap_or_default()
     }
 
+    /// Best price and size on one ladder ("yes" = bids, "no" = asks) with OUR resting size at
+    /// `own_px` removed, so a quoter never reads its own order as the market (and pennies itself).
+    pub fn best_excluding(&self, side: &str, own_px: Option<i64>, own_sz: i64) -> Option<(i64, i64)> {
+        let mut it: Box<dyn Iterator<Item = (&i64, &i64)>> = if side == "yes" {
+            Box::new(self.yes.iter().rev())
+        } else {
+            Box::new(self.no.iter())
+        };
+        it.find_map(|(p, sz)| {
+            let other = if Some(*p) == own_px { sz - own_sz } else { *sz };
+            (other > 0).then_some((*p, other))
+        })
+    }
+
     pub fn touch(&self) -> Touch {
         let bid = self.yes.last_key_value();
         let ask = self.no.first_key_value();
@@ -149,6 +163,21 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(book.touch().yes_bid_fp, Some(6100));
+    }
+
+    #[test]
+    fn best_excluding_never_reads_our_own_clip_as_the_market() {
+        let book = Book::from_snapshot(&json!({
+            "yes_dollars_fp": [["0.4000", "50.00"], ["0.4300", "1.00"]],
+            "no_dollars_fp": [["0.4800", "1.00"], ["0.4700", "3.00"]]
+        }))
+        .unwrap();
+        // Our 1-ct improved bid at 0.43 is alone there: the others' best bid is 0.40.
+        assert_eq!(book.best_excluding("yes", Some(4300), 100), Some((4000, 5000)));
+        // Someone joined our ask at 0.47 (3 ct incl. our 1): the level stays, with 2 ct of theirs.
+        assert_eq!(book.best_excluding("no", Some(4700), 100), Some((4700, 200)));
+        // No order of ours: the plain touch.
+        assert_eq!(book.best_excluding("no", None, 100), Some((4700, 300)));
     }
 
     #[test]

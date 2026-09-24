@@ -50,6 +50,9 @@ pub struct LiveParams {
     pub thin_pull: f64,
     pub exchange_index: i64,
     pub out: PathBuf,
+    /// 0 = join the touch (mid band). n > 0 = PENNY (PREREG_penny.md): one tick inside the
+    /// OTHERS' touch, any band 1-99 c, only when their spread is at least n ticks.
+    pub penny_room: i64,
 }
 
 const BID: usize = 0;
@@ -142,6 +145,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     let mut tokens = 900.0f64;
     let mut last_refill = unix_us();
     let (mut posts, mut cancels, mut rejects, mut fills, mut group_trips) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    // Orders of ours that another maker improved past while they rested (counted once each).
+    let mut undercuts = 0u64;
+    let mut undercut_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cash_c = 0.0f64; // from our own fills, for the fast local mark-to-market cap
     // Order group tripped: no posting at all until a reset SUCCEEDS (not merely until a timer
     // expires — posting into a tripped group is rejected and must not re-arm the pause).
@@ -267,8 +273,8 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                         Ok(eq) => {
                             let session = eq - equity0;
                             j.row("equity", json!({"equity_c": eq, "session_c": session, "cumulative_c": eq - baseline}));
-                            eprintln!("[{}s] equity {:.2}c session {:+.2}c cumulative {:+.2}c | posts={} cancels={} rejects={} fills={} group_trips={} resting={}",
-                                started.elapsed().as_secs(), eq, session, eq - baseline, posts, cancels, rejects, fills, group_trips, orders.len());
+                            eprintln!("[{}s] equity {:.2}c session {:+.2}c cumulative {:+.2}c | posts={} cancels={} rejects={} fills={} group_trips={} undercuts={} resting={}",
+                                started.elapsed().as_secs(), eq, session, eq - baseline, posts, cancels, rejects, fills, group_trips, undercuts, orders.len());
                             if session < -p.session_max_loss_c { stop_reason = format!("session loss cap: {session:.2}c"); break 'outer; }
                             if eq - baseline < -p.cumulative_max_loss_c { stop_reason = format!("cumulative loss cap: {:.2}c", eq - baseline); break 'outer; }
                         }
@@ -366,16 +372,39 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
             if group_tripped { continue; }
             tokens = (tokens + (now - last_refill) as f64 / 1e6 * 300.0).min(900.0);
             last_refill = now;
-            let t = book.touch();
-            let (Some(bid), Some(ask)) = (t.yes_bid_fp, t.yes_ask_fp) else { continue };
-            let (bsz, asz) = (t.yes_bid_size_fp.unwrap_or(0), t.yes_ask_size_fp.unwrap_or(0));
+            // The market as OTHER participants make it: our own resting clip removed, or an
+            // improved quote of ours would read as the touch and we would penny ourselves.
+            let own_px = |i: usize| mk.slots[i].as_ref().and_then(|c| orders.get(c)).map(|o| o.price);
+            let (own_bid, own_ask) = (own_px(BID), own_px(ASK));
+            let (Some((bid, bsz)), Some((ask, asz))) = (
+                book.best_excluding("yes", own_bid, SIZE_SCALE),
+                book.best_excluding("no", own_ask, SIZE_SCALE),
+            ) else { continue };
             let mid = (bid + ask) as f64 / 200.0;
             let mom = mk.mid_at(vt - 1_000_000).map(|m0| mid - m0).unwrap_or(0.0);
             let tot = (bsz + asz).max(1) as f64;
-            let postable = mid >= p.mid_lo_c && mid <= p.mid_hi_c
-                && mk.close_unix_ms - now / 1_000 > p.stop_before_close_s * 1_000;
+            let open_ok = mk.close_unix_ms - now / 1_000 > p.stop_before_close_s * 1_000;
+            let postable = mid >= p.mid_lo_c && mid <= p.mid_hi_c && open_ok;
+            // Diagnostic the shadow could not see: another maker improving past our live quote.
+            for (i, own) in [(BID, own_bid), (ASK, own_ask)] {
+                let Some(px) = own else { continue };
+                let passed = if i == BID { bid > px } else { ask < px };
+                if passed {
+                    let coid = mk.slots[i].clone().unwrap_or_default();
+                    if undercut_seen.insert(coid.clone()) {
+                        undercuts += 1;
+                        j.row("undercut", json!({"coid": coid, "our_px": px, "their_px": if i == BID { bid } else { ask }, "vt": vt}));
+                    }
+                }
+            }
             for i in [BID, ASK] {
-                let mut want = postable;
+                let side_px = if i == BID { bid } else { ask };
+                let tick: i64 = if side_px < 1_000 || side_px > 9_000 { 10 } else { 100 };
+                let mut want = if p.penny_room > 0 {
+                    open_ok && ask - bid >= p.penny_room * tick && mid > 1.0 && mid < 99.0
+                } else {
+                    postable
+                };
                 // Count the clip we are about to post: a fractional position (−0.98 after a
                 // partial fill) must not admit a clip that ends at −1.98 (happened 2026-09-23).
                 if i == BID && mk.pos_fp + SIZE_SCALE > p.max_pos_fp { want = false; }
@@ -383,7 +412,12 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                 let toxic = if i == ASK { mom > p.mom_pull_c || bsz as f64 / tot > p.thin_pull }
                             else { -mom > p.mom_pull_c || asz as f64 / tot > p.thin_pull };
                 if toxic { want = false; }
-                let target = if i == BID { bid } else { ask };
+                let target = match (p.penny_room > 0, i == BID) {
+                    (true, true) => bid + tick,
+                    (true, false) => ask - tick,
+                    (false, true) => bid,
+                    (false, false) => ask,
+                };
                 let cur = mk.slots[i].as_ref().and_then(|c| orders.get(c));
                 match cur {
                     Some(o) if o.st == St::PendingCancel || o.st == St::PendingNew => continue,
@@ -428,7 +462,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     }
 
     eprintln!("STOP: {stop_reason}. Cancelling everything.");
-    j.row("stop", json!({"reason": stop_reason, "posts": posts, "cancels": cancels, "rejects": rejects, "fills": fills, "group_trips": group_trips, "local_cash_c": cash_c}));
+    j.row("stop", json!({"reason": stop_reason, "posts": posts, "cancels": cancels, "rejects": rejects, "fills": fills, "group_trips": group_trips, "undercuts": undercuts, "local_cash_c": cash_c}));
     cancel_everything(&http, &auth, &mut j, p.exchange_index).await;
     let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await;
     let eq = equity_c(&http, &auth, p.exchange_index).await.unwrap_or(f64::NAN);
