@@ -264,6 +264,24 @@ fn signed_ws_request(
 struct Discovered {
     ticker: String,
     close_unix_ms: i64,
+    /// The venue's price grid: (start, end, step) in PRICE_SCALE units, from `price_ranges`.
+    /// 15M crypto and GOLD/SILVER/WTI are 0.1c below 10c and above 90c; COPPER/NATGAS are 1c
+    /// everywhere, so a wing tick must never be assumed.
+    ranges: Vec<(i64, i64, i64)>,
+}
+
+fn price_ranges(m: &Value) -> Vec<(i64, i64, i64)> {
+    m["price_ranges"].as_array().into_iter().flatten().filter_map(|r| {
+        let f = |k: &str| parse_value(r.get(k), PRICE_SCALE).ok();
+        Some((f("start")?, f("end")?, f("step")?))
+    }).collect()
+}
+
+/// Price step at `px` on this grid; 1c if the grid is unknown (coarser never invents a price).
+pub fn tick_at(ranges: &[(i64, i64, i64)], px: i64) -> i64 {
+    ranges.iter().find(|(a, b, _)| *a <= px && px < *b)
+        .or_else(|| ranges.last().filter(|(_, b, _)| px == *b))
+        .map_or(100, |(_, _, st)| *st)
 }
 
 async fn discover(tx: mpsc::Sender<Discovered>, series: Vec<String>) -> Result<()> {
@@ -291,7 +309,7 @@ async fn discover(tx: mpsc::Sender<Discovered>, series: Vec<String>) -> Result<(
                 let Some(ticker) = m["ticker"].as_str() else { continue };
                 let close = m["close_time"].as_str().and_then(rfc3339_ms).unwrap_or(0);
                 if seen.insert(ticker.to_owned()) {
-                    tx.send(Discovered { ticker: ticker.to_owned(), close_unix_ms: close })
+                    tx.send(Discovered { ticker: ticker.to_owned(), close_unix_ms: close, ranges: price_ranges(m) })
                         .await?;
                 }
             }
@@ -696,6 +714,18 @@ fn print_brief(r: &Value) {
 #[cfg(test)]
 mod tests {
     use super::rfc3339_ms;
+
+    #[test]
+    fn tick_follows_the_venue_grid() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"price_ranges":[{"end":"0.1000","start":"0.0000","step":"0.0010"},{"end":"0.9000","start":"0.1000","step":"0.0100"},{"end":"1.0000","start":"0.9000","step":"0.0010"}]}"#).unwrap();
+        let r = super::price_ranges(&v);
+        assert_eq!(super::tick_at(&r, 500), 10); // 5c: deci-cent wing
+        assert_eq!(super::tick_at(&r, 1_000), 100); // 10c: mid band starts
+        assert_eq!(super::tick_at(&r, 9_500), 10);
+        let flat: serde_json::Value = serde_json::from_str(r#"{"price_ranges":[{"end":"1.0000","start":"0.0000","step":"0.0100"}]}"#).unwrap();
+        assert_eq!(super::tick_at(&super::price_ranges(&flat), 500), 100); // COPPER wing: 1c
+        assert_eq!(super::tick_at(&[], 500), 100);
+    }
 
     #[test]
     fn parses_close_time() {

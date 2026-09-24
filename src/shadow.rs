@@ -27,7 +27,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use crate::{
     auth::Auth,
     book::{Book, PRICE_SCALE, SIZE_SCALE, parse_value},
-    discover, rfc3339_us, signed_ws_request, sub_cmd, unix_us,
+    discover, rfc3339_us, tick_at, signed_ws_request, sub_cmd, unix_us,
 };
 
 pub struct Params {
@@ -130,6 +130,7 @@ struct Strategy {
 struct Mkt {
     book: Option<Book>,
     close_unix_ms: i64,
+    ranges: Vec<(i64, i64, i64)>,
     mids: VecDeque<(i64, f64)>, // (venue µs, mid cents) on touch change
 }
 
@@ -168,6 +169,10 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
         ("base", true, false, true, 0u8, 0i64),
         ("penny5", true, false, true, 0, 5),
         ("penny2", true, false, true, 0, 2),
+        // Ungated twins (PREREG_commodities_penny.md): the crypto gate's features did not
+        // replicate on the commodity tape, so the gate is tested, not assumed.
+        ("penny5_ng", false, false, true, 0, 5),
+        ("penny2_ng", false, false, true, 0, 2),
     ]
         .into_iter()
         .map(|(name, gate, amend, prorata, pair, penny_room)| Strategy {
@@ -220,7 +225,7 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                 m = ws.next() => m,
                 d = disc_rx.recv() => {
                     let d = d.context("discovery stopped")?;
-                    markets.insert(d.ticker.clone(), Mkt { close_unix_ms: d.close_unix_ms, ..Default::default() });
+                    markets.insert(d.ticker.clone(), Mkt { close_unix_ms: d.close_unix_ms, ranges: d.ranges.clone(), ..Default::default() });
                     ws.send(Message::Text(sub_cmd(next_id, std::slice::from_ref(&d.ticker)).into())).await?;
                     next_id += 1;
                     continue;
@@ -459,9 +464,9 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                 for i in [BID, ASK] {
                     let pairing = (i == ASK && seat.pos_fp > 0) || (i == BID && seat.pos_fp < 0);
                     let pair_mode = if pairing { s.pair } else { 0 };
-                    // Venue tick is tapered: 0.1 c in the wings, 1 c in the middle.
+                    // Venue tick from the market's own price grid (COPPER/NATGAS: 1c in the wings too).
                     let side_px = if i == BID { bid } else { ask };
-                    let tick: i64 = if side_px < 1_000 || side_px > 9_000 { 10 } else { 100 };
+                    let tick = tick_at(&mk.ranges, side_px);
                     let mut want = if s.penny_room > 0 {
                         open_long && ask - bid >= s.penny_room * tick && mid > 1.0 && mid < 99.0
                     } else {
