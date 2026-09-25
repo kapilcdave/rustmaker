@@ -54,6 +54,10 @@ pub struct LiveParams {
     /// 0 = join the touch (mid band). n > 0 = PENNY (PREREG_penny.md): one tick inside the
     /// OTHERS' touch, any band 1-99 c, only when their spread is at least n ticks.
     pub penny_room: i64,
+    /// No order that would OPEN or ADD to a position this close to the market's close; orders
+    /// that reduce the position keep quoting until `stop_before_close_s`. 450 s cut live
+    /// leftovers 126 → 15 ct over 197 markets (`leftover_rules.py`, 2026-09-25).
+    pub open_cutoff_s: i64,
 }
 
 const BID: usize = 0;
@@ -419,6 +423,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                 // partial fill) must not admit a clip that ends at −1.98 (happened 2026-09-23).
                 if i == BID && mk.pos_fp + SIZE_SCALE > p.max_pos_fp { want = false; }
                 if i == ASK && mk.pos_fp - SIZE_SCALE < -p.max_pos_fp { want = false; }
+                // A bid opens/adds unless we are short; an ask opens/adds unless we are long.
+                let opens = if i == BID { mk.pos_fp >= 0 } else { mk.pos_fp <= 0 };
+                if opens && mk.close_unix_ms - now / 1_000 <= p.open_cutoff_s * 1_000 { want = false; }
                 let toxic = if i == ASK { mom > p.mom_pull_c || bsz as f64 / tot > p.thin_pull }
                             else { -mom > p.mom_pull_c || asz as f64 / tot > p.thin_pull };
                 if toxic { want = false; }
