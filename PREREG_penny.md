@@ -45,3 +45,12 @@
 - Pairs +0.50 c/pair, mk60s +0.40 c/ct. Series: NEAR +14.6, DOGE +12.1 strongest; BTC −2.0, SOL −2.6.
 - Status: strongest evidence on this seat, not a clean prereg pass. The untested risk is competitor
   re-pennying of a REAL quote; only a capped live run measures it.
+
+## First LIVE run (2026-09-24 23:08Z → 25 02:08Z, 3 h, 9 series, 1 ct, launched by the user)
+- Venue settlement ledger: 108 markets, 1,313 ct, **+$0.85** ($9.0237 → $9.8746); +0.79 ± 2.22 c/market
+  (bound −3.55). Halves +3.03 / −1.45. Compatible with the shadow (+4.76 ± 1.48, gap ~1.5 SE) and with 0.
+- Series: 7/9 positive; ETH −$1.58, XRP −$1.74 carried all the loss. Maker fees $0.0017 total.
+- Undercuts: 9.1% of 99,367 quotes were improved past while resting, but only 37 of 1,353 fills followed
+  an undercut — the re-penny war removes fill opportunities, not fill quality (`undercut.py`).
+- Real fill markout +0.066 c/ct at 5 s, +0.164 at 60 s (shadow penny5: +0.256 / +0.400).
+- Clean shutdown, nothing resting, flat. Rejects 814, order-group trips 10 (all auto-replaced).
