@@ -86,6 +86,10 @@ struct Mkt {
     mids: VecDeque<(i64, f64)>,
     pos_fp: i64,
     slots: [Option<String>; 2], // coid per side
+    /// No posting in this market until then: after any fill, until the venue's `fill` message
+    /// (the position authority) has landed. The `user_order` "executed" message can arrive first,
+    /// free the slot, and let a new order post on a stale position (NEAR reached +2, 2026-09-25).
+    hold_until_us: i64,
 }
 
 impl Mkt {
@@ -332,6 +336,13 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     j.row("user_order", m.clone());
                     let coid = m["client_order_id"].as_str().unwrap_or("").to_owned();
                     let st = m["status"].as_str().unwrap_or("");
+                    if m["fill_count_fp"].as_str().is_some_and(|f| f != "0.00") {
+                        let ticker = orders.get(&coid).map(|o| o.ticker.clone())
+                            .or_else(|| m["ticker"].as_str().map(str::to_owned));
+                        if let Some(mk) = ticker.and_then(|t| markets.get_mut(&t)) {
+                            mk.hold_until_us = now + 1_500_000;
+                        }
+                    }
                     if st == "canceled" || st == "executed" {
                         if st == "canceled" && orders.contains_key(&coid) && m["remaining_count_fp"].as_str() == Some("0.00") {
                             // Possibly the order group firing: venue cancelled us, not we.
@@ -383,7 +394,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
             }
 
             // ---- decide ----
-            if group_tripped { continue; }
+            if group_tripped || now < mk.hold_until_us { continue; }
             tokens = (tokens + (now - last_refill) as f64 / 1e6 * 300.0).min(900.0);
             last_refill = now;
             // The market as OTHER participants make it: our own resting clip removed, or an
@@ -472,6 +483,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
         }
         // Feed broke: we are blind. Cancel everything before reconnecting.
         eprintln!("feed break: cancelling all resting orders");
+        tokio::time::sleep(Duration::from_secs(2)).await; // in-flight creates land first
         cancel_everything(&http, &auth, &mut j, p.exchange_index).await;
         orders.clear();
         for m in markets.values_mut() { m.slots = [None, None]; }
@@ -479,6 +491,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     }
 
     eprintln!("STOP: {stop_reason}. Cancelling everything.");
+    // Let creates already in flight land first, or they rest AFTER the sweep (an XRP bid did,
+    // 2026-09-25).
+    tokio::time::sleep(Duration::from_secs(2)).await;
     j.row("stop", json!({"reason": stop_reason, "posts": posts, "cancels": cancels, "rejects": rejects, "fills": fills, "group_trips": group_trips, "undercuts": undercuts, "local_cash_c": cash_c}));
     cancel_everything(&http, &auth, &mut j, p.exchange_index).await;
     let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await;
@@ -521,6 +536,17 @@ fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSe
     });
 }
 
+/// Standalone kill: cancel every resting order on the account and verify the book is empty.
+/// Places nothing. For cleanup when an engine exited with an order still in flight.
+pub async fn cancel_all(auth: Auth, exchange_index: i64) -> Result<()> {
+    let http = client()?;
+    let tmp = std::env::temp_dir().join(format!("cancel_all_{}.jsonl.gz", unix_us()));
+    let mut j = Journal(BufWriter::new(GzEncoder::new(File::create(&tmp)?, Compression::fast())));
+    cancel_everything(&http, &auth, &mut j, exchange_index).await;
+    j.finish();
+    Ok(())
+}
+
 async fn cancel_everything(http: &reqwest::Client, auth: &Auth, j: &mut Journal, exchange_index: i64) {
     for attempt in 0..3 {
         let open = match signed(http, auth, "GET", "/portfolio/orders?status=resting", None).await {
@@ -532,28 +558,40 @@ async fn cancel_everything(http: &reqwest::Client, auth: &Auth, j: &mut Journal,
         j.row("sweep", json!({"attempt": attempt, "resting": list.len()}));
         if list.is_empty() { eprintln!("verified: no resting orders"); return; }
         let body = json!({"orders": list.iter().map(|(id, t)| json!({"order_id": id, "market_ticker": t, "exchange_index": exchange_index})).collect::<Vec<_>>()});
-        if let Err(e) = signed(http, auth, "DELETE", "/portfolio/events/orders/batched", Some(&body)).await {
-            eprintln!("batch cancel failed: {e:#}");
-            for (id, t) in &list {
-                let _ = signed(http, auth, "DELETE", &format!("/portfolio/events/orders/{id}?market_ticker={t}"), None).await;
+        // The batch call can return 200 while cancelling nothing (per-order errors ride inside the
+        // body — seen 2026-09-25), so log its body and ALWAYS follow with single cancels.
+        match signed(http, auth, "DELETE", "/portfolio/events/orders/batched", Some(&body)).await {
+            Ok(v) => j.row("batch_cancel", v),
+            Err(e) => eprintln!("batch cancel failed: {e:#}"),
+        }
+        for (id, t) in &list {
+            let path = format!("/portfolio/events/orders/{id}?market_ticker={t}&exchange_index={exchange_index}");
+            if let Err(e) = signed(http, auth, "DELETE", &path, None).await {
+                eprintln!("cancel {id} on {t} failed: {e:#}");
             }
         }
     }
     eprintln!("WARNING: could not verify an empty book after 3 sweeps — check the account");
 }
 
-/// Venue equity in cents: cash on the trading shard + cost basis of open positions.
-/// Read the same way at start and during the run so the baseline is comparable.
+/// Venue equity in cents: cash on the trading shard + cost of everything held in unsettled 15M
+/// markets. Read the same way at start and during the run so the baseline is comparable.
+///
+/// NOT `market_exposure_dollars`: a YES+NO pair nets to position 0 / exposure 0, so its cost
+/// vanished from equity until settlement and showed as a phantom drawdown (2026-09-25). This
+/// engine only ever BUYS (YES on the bid, NO on the ask), so `total_traded_dollars` is the full
+/// cost basis of a market's holdings, pairs included.
 async fn equity_c(http: &reqwest::Client, auth: &Auth, exchange_index: i64) -> Result<f64> {
     let bal = signed(http, auth, "GET", "/portfolio/balance", None).await?;
     let shard = bal["balance_breakdown"].as_array().into_iter().flatten()
         .find(|b| b["exchange_index"].as_i64() == Some(exchange_index))
         .and_then(|b| b["balance"].as_str()).context("no balance on trading shard")?;
     let cash: f64 = shard.parse::<f64>()? * 100.0;
-    let pos = signed(http, auth, "GET", "/portfolio/positions?count_filter=position&limit=200", None).await?;
-    let exposure: f64 = pos["market_positions"].as_array().into_iter().flatten()
-        .filter_map(|m| m["market_exposure_dollars"].as_str()?.parse::<f64>().ok()).sum::<f64>() * 100.0;
-    Ok(cash + exposure)
+    let pos = signed(http, auth, "GET", "/portfolio/positions?limit=200", None).await?;
+    let held: f64 = pos["market_positions"].as_array().into_iter().flatten()
+        .filter(|m| m["ticker"].as_str().is_some_and(|t| t.contains("15M-")))
+        .filter_map(|m| m["total_traded_dollars"].as_str()?.parse::<f64>().ok()).sum::<f64>() * 100.0;
+    Ok(cash + held)
 }
 
 /// Seed positions from the venue, so a restart never forgets inventory it is still holding.

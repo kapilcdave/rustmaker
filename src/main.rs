@@ -142,6 +142,7 @@ async fn main() -> Result<()> {
             };
             live::run(load_auth()?, params).await
         }
+        Some("cancel-all") => live::cancel_all(load_auth()?, 2).await,
         Some("latency") => {
             let n: usize = flag("--n").map_or(Ok(50), |m| m.parse())?;
             latency::run(load_auth()?, n).await
