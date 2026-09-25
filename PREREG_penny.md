@@ -54,3 +54,11 @@
   an undercut — the re-penny war removes fill opportunities, not fill quality (`undercut.py`).
 - Real fill markout +0.066 c/ct at 5 s, +0.164 at 60 s (shadow penny5: +0.256 / +0.400).
 - Clean shutdown, nothing resting, flat. Rejects 814, order-group trips 10 (all auto-replaced).
+
+## Leftover-reduction rules tested (2026-09-25, `leftover_rules.py`, replay of real fill sequences)
+Chosen on the 14 h shadow, checked on 197 live markets. Neither rule raises expected P&L:
+- Open cutoff 300 s: shadow +4.81 → +1.62 c/mkt, live +1.50 → +0.57; leftovers 126 → 37 ct live,
+  SE 2.10 → 1.31. 450 s: live +0.52, leftovers 15. The last 2-5 min carry the best pairs.
+- Loss-if-wrong cap 85/70/50 c: shadow +5.75/+6.39/+5.54, live +1.66/+1.99/+0.94 — all within noise.
+- Decision: keep the current rule (cutoff 120 s, no cap). The leftover swings are variance of the edge;
+  a 300 s cutoff is the lever if smoother P&L is preferred over ~1 c/mkt.
