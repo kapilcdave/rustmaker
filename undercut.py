@@ -1,9 +1,9 @@
-import json, bisect, sys, collections
+import json, bisect, sys, collections, gzip
 from array import array
 path = sys.argv[1]
 mids = collections.defaultdict(lambda: (array('q'), array('d')))
 new, under, fills = {}, {}, []
-with open(path) as f:
+with (gzip.open(path, "rt") if path.endswith(".gz") else open(path)) as f:
     for line in f:
         k = line[6:16]
         if k.startswith('B"'):

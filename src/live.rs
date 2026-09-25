@@ -25,6 +25,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use flate2::{Compression, write::GzEncoder};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{sync::mpsc, time::interval};
@@ -95,7 +96,10 @@ enum Done {
     Cancelled { coid: String, res: Result<Value> },
 }
 
-struct Journal(BufWriter<File>);
+/// Gzipped JSONL. A 3 h, 9-series run wrote 431 MB uncompressed (the box has ~3 GB free);
+/// gzip -1 made it 55 MB. `flush` is a gzip SYNC flush, so a crash loses at most one
+/// housekeeping interval and the file stays readable up to the last flush.
+struct Journal(BufWriter<GzEncoder<File>>);
 
 impl Journal {
     fn row(&mut self, kind: &str, v: Value) {
@@ -104,6 +108,11 @@ impl Journal {
     fn flush(&mut self) {
         let _ = self.0.flush();
     }
+    fn finish(self) {
+        if let Ok(gz) = self.0.into_inner() {
+            let _ = gz.finish();
+        }
+    }
 }
 
 pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
@@ -111,9 +120,10 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     let auth = Arc::new(auth);
     let http = client()?;
     let stamp = unix_us() / 1_000;
-    let mut j = Journal(BufWriter::new(
-        OpenOptions::new().create(true).append(true).open(p.out.join(format!("live_{stamp}.jsonl")))?,
-    ));
+    let mut j = Journal(BufWriter::new(GzEncoder::new(
+        OpenOptions::new().create(true).append(true).open(p.out.join(format!("live_{stamp}.jsonl.gz")))?,
+        Compression::fast(),
+    )));
 
     // ---- equity baseline and the cumulative cap across restarts ----
     let equity0 = equity_c(&http, &auth, p.exchange_index).await?;
@@ -467,7 +477,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await;
     let eq = equity_c(&http, &auth, p.exchange_index).await.unwrap_or(f64::NAN);
     j.row("end", json!({"equity_c": eq, "session_c": eq - equity0, "cumulative_c": eq - baseline}));
-    j.flush();
+    j.finish();
     eprintln!("end equity {eq:.2}c, session {:+.2}c, cumulative {:+.2}c (open positions ride to settlement)", eq - equity0, eq - baseline);
     Ok(())
 }
