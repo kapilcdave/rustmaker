@@ -85,6 +85,12 @@ struct Mkt {
     close_unix_ms: i64,
     mids: VecDeque<(i64, f64)>,
     pos_fp: i64,
+    /// Our own fill ledger for this market, this run: contracts of YES and NO bought and the net
+    /// cash flow (cents). Marked at `last_mid`, a YES+NO pair is worth 100 at any mid.
+    yes_ct: f64,
+    no_ct: f64,
+    flow_c: f64,
+    last_mid: f64,
     slots: [Option<String>; 2], // coid per side
     /// No posting in this market until then: after any fill, until the venue's `fill` message
     /// (the position authority) has landed. The `user_order` "executed" message can arrive first,
@@ -93,6 +99,10 @@ struct Mkt {
 }
 
 impl Mkt {
+    fn mtm_c(&self) -> f64 {
+        self.flow_c + self.yes_ct * self.last_mid + self.no_ct * (100.0 - self.last_mid)
+    }
+
     fn mid_at(&self, t: i64) -> Option<f64> {
         self.mids.iter().rev().find(|(vt, _)| *vt <= t).map(|(_, m)| *m)
     }
@@ -167,6 +177,8 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     let mut undercuts = 0u64;
     let mut undercut_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cash_c = 0.0f64; // from our own fills, for the fast local mark-to-market cap
+    // Session P&L the caps use: closed markets' locked-in ledger value + open markets marked.
+    let mut realized_c = 0.0f64;
     // Order group tripped: no posting at all until a reset SUCCEEDS (not merely until a timer
     // expires — posting into a tripped group is rejected and must not re-arm the pause).
     let mut group_tripped = false;
@@ -246,6 +258,10 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                         .map(|o| o.coid.clone()).collect();
                     for c in late { request_cancel(&http, &auth, &done_tx, &mut orders, &c, p.exchange_index, &mut cancels); }
                     let before = markets.len();
+                    // Lock in the ledger value of markets we are about to forget.
+                    for m in markets.values().filter(|m| now_ms >= m.close_unix_ms + 5_000) {
+                        realized_c += m.mtm_c();
+                    }
                     markets.retain(|_, m| now_ms < m.close_unix_ms + 5_000);
                     if markets.len() != before || markets.len() < p.series.len() {
                         let old: Vec<String> = markets.keys().cloned().collect();
@@ -287,17 +303,16 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     continue;
                 }
                 _ = equity_tick.tick() => {
-                    match equity_c(&http, &auth, p.exchange_index).await {
-                        Ok(eq) => {
-                            let session = eq - equity0;
-                            j.row("equity", json!({"equity_c": eq, "session_c": session, "cumulative_c": eq - baseline}));
-                            eprintln!("[{}s] equity {:.2}c session {:+.2}c cumulative {:+.2}c | posts={} cancels={} rejects={} fills={} group_trips={} undercuts={} resting={}",
-                                started.elapsed().as_secs(), eq, session, eq - baseline, posts, cancels, rejects, fills, group_trips, undercuts, orders.len());
-                            if session < -p.session_max_loss_c { stop_reason = format!("session loss cap: {session:.2}c"); break 'outer; }
-                            if eq - baseline < -p.cumulative_max_loss_c { stop_reason = format!("cumulative loss cap: {:.2}c", eq - baseline); break 'outer; }
-                        }
-                        Err(e) => eprintln!("equity read failed: {e:#}"),
-                    }
+                    // Caps run on OUR ledger, marked to mid (a pair is exactly 100): the venue's
+                    // position fields net pairs away, which read as a phantom −$6 on 2026-09-25.
+                    let session = realized_c + markets.values().map(Mkt::mtm_c).sum::<f64>();
+                    let cumulative = equity0 - baseline + session;
+                    let venue = equity_c(&http, &auth, p.exchange_index).await.ok();
+                    j.row("equity", json!({"session_mtm_c": session, "cumulative_c": cumulative, "venue_cash_plus_net_exposure_c": venue}));
+                    eprintln!("[{}s] session {:+.2}c cumulative {:+.2}c (venue cash+net exposure {:.2}c) | posts={} cancels={} rejects={} fills={} group_trips={} undercuts={} resting={}",
+                        started.elapsed().as_secs(), session, cumulative, venue.unwrap_or(f64::NAN), posts, cancels, rejects, fills, group_trips, undercuts, orders.len());
+                    if session < -p.session_max_loss_c { stop_reason = format!("session loss cap: {session:.2}c"); break 'outer; }
+                    if cumulative < -p.cumulative_max_loss_c { stop_reason = format!("cumulative loss cap: {cumulative:.2}c"); break 'outer; }
                     continue;
                 }
                 _ = tokio::signal::ctrl_c() => { stop_reason = "ctrl-c".into(); break 'outer; }
@@ -327,8 +342,13 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     let ct = parse_value(m.get("count_fp"), SIZE_SCALE).unwrap_or(0) as f64 / SIZE_SCALE as f64;
                     let buy_yes = m["book_side"].as_str() == Some("bid");
                     cash_c += if buy_yes { -px * ct } else { px * ct };
-                    if let (Some(mk), Ok(post)) = (markets.get_mut(&ticker), parse_value(m.get("post_position_fp"), SIZE_SCALE)) {
-                        mk.pos_fp = post; // the venue's number, not ours
+                    if let Some(mk) = markets.get_mut(&ticker) {
+                        // Bid fill = bought YES at px; ask fill = sold YES at px = bought NO at 100 - px.
+                        if buy_yes { mk.yes_ct += ct; mk.flow_c -= px * ct; }
+                        else { mk.no_ct += ct; mk.flow_c -= (100.0 - px) * ct; }
+                        if let Ok(post) = parse_value(m.get("post_position_fp"), SIZE_SCALE) {
+                            mk.pos_fp = post; // the venue's number, not ours
+                        }
                     }
                     continue;
                 }
@@ -364,7 +384,15 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
             let Some(ticker) = m["market_ticker"].as_str() else { continue };
             let Some(mk) = markets.get_mut(ticker) else { continue };
             let vt = match kind {
-                "orderbook_snapshot" => { mk.book = Book::from_snapshot(m).ok(); continue; }
+                "orderbook_snapshot" => {
+                    mk.book = Book::from_snapshot(m).ok();
+                    if let Some(t) = mk.book.as_ref().map(Book::touch) {
+                        if let (Some(b), Some(a)) = (t.yes_bid_fp, t.yes_ask_fp) {
+                            mk.last_mid = (b + a) as f64 / 200.0;
+                        }
+                    }
+                    continue;
+                }
                 "orderbook_delta" => m["ts"].as_str().and_then(rfc3339_us),
                 "trade" => m["ts_ms"].as_i64().map(|x| x * 1_000),
                 _ => None,
@@ -385,6 +413,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     let mid = (b + a) as f64 / 200.0;
                     if mk.mids.back().is_none_or(|(_, x)| *x != mid) {
                         mk.mids.push_back((vt, mid));
+                        mk.last_mid = mid;
                         j.row("B", json!([ticker, vt, b, t.yes_bid_size_fp, a, t.yes_ask_size_fp]));
                     }
                     while mk.mids.len() > 2 && mk.mids[1].0 < vt - 2_000_000 { mk.mids.pop_front(); }
@@ -498,7 +527,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     cancel_everything(&http, &auth, &mut j, p.exchange_index).await;
     let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await;
     let eq = equity_c(&http, &auth, p.exchange_index).await.unwrap_or(f64::NAN);
-    j.row("end", json!({"equity_c": eq, "session_c": eq - equity0, "cumulative_c": eq - baseline}));
+    let session = realized_c + markets.values().map(Mkt::mtm_c).sum::<f64>();
+    j.row("end", json!({"venue_equity_c": eq, "session_mtm_c": session, "cumulative_c": equity0 - baseline + session}));
+    eprintln!("session (own ledger, marked) {session:+.2}c, cumulative {:+.2}c", equity0 - baseline + session);
     j.finish();
     eprintln!("end equity {eq:.2}c, session {:+.2}c, cumulative {:+.2}c (open positions ride to settlement)", eq - equity0, eq - baseline);
     Ok(())
@@ -574,24 +605,21 @@ async fn cancel_everything(http: &reqwest::Client, auth: &Auth, j: &mut Journal,
     eprintln!("WARNING: could not verify an empty book after 3 sweeps — check the account");
 }
 
-/// Venue equity in cents: cash on the trading shard + cost of everything held in unsettled 15M
-/// markets. Read the same way at start and during the run so the baseline is comparable.
-///
-/// NOT `market_exposure_dollars`: a YES+NO pair nets to position 0 / exposure 0, so its cost
-/// vanished from equity until settlement and showed as a phantom drawdown (2026-09-25). This
-/// engine only ever BUYS (YES on the bid, NO on the ask), so `total_traded_dollars` is the full
-/// cost basis of a market's holdings, pairs included.
+/// Venue equity in cents: cash on the trading shard + NET exposure of open positions. It
+/// UNDERSTATES while pairs are open (a YES+NO pair nets to exposure 0 until settlement), so it is
+/// only a conservative startup / cumulative reference; the running caps use the engine's own
+/// ledger. (Valuing holdings at `total_traded_dollars` instead OVERSTATED them 3x — it counts
+/// turnover — and phantom-tripped the session cap on 2026-09-25.)
 async fn equity_c(http: &reqwest::Client, auth: &Auth, exchange_index: i64) -> Result<f64> {
     let bal = signed(http, auth, "GET", "/portfolio/balance", None).await?;
     let shard = bal["balance_breakdown"].as_array().into_iter().flatten()
         .find(|b| b["exchange_index"].as_i64() == Some(exchange_index))
         .and_then(|b| b["balance"].as_str()).context("no balance on trading shard")?;
     let cash: f64 = shard.parse::<f64>()? * 100.0;
-    let pos = signed(http, auth, "GET", "/portfolio/positions?limit=200", None).await?;
-    let held: f64 = pos["market_positions"].as_array().into_iter().flatten()
-        .filter(|m| m["ticker"].as_str().is_some_and(|t| t.contains("15M-")))
-        .filter_map(|m| m["total_traded_dollars"].as_str()?.parse::<f64>().ok()).sum::<f64>() * 100.0;
-    Ok(cash + held)
+    let pos = signed(http, auth, "GET", "/portfolio/positions?count_filter=position&limit=200", None).await?;
+    let exposure: f64 = pos["market_positions"].as_array().into_iter().flatten()
+        .filter_map(|m| m["market_exposure_dollars"].as_str()?.parse::<f64>().ok()).sum::<f64>() * 100.0;
+    Ok(cash + exposure)
 }
 
 /// Seed positions from the venue, so a restart never forgets inventory it is still holding.
@@ -639,4 +667,24 @@ pub async fn signed(http: &reqwest::Client, auth: &Auth, method: &str, path: &st
     let text = resp.text().await?;
     if !status.is_success() { bail!("{method} {path} → {status}: {text}"); }
     Ok(if text.is_empty() { Value::Null } else { serde_json::from_str(&text)? })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Mkt;
+
+    #[test]
+    fn a_pair_is_worth_one_dollar_at_any_mid() {
+        // Bought YES at 60 and NO at 45: a pair that cost 105 and pays 100 → −5 at every mid.
+        let mut m = Mkt { yes_ct: 1.0, no_ct: 1.0, flow_c: -105.0, ..Default::default() };
+        for mid in [1.0, 37.5, 50.0, 99.0] {
+            m.last_mid = mid;
+            assert!((m.mtm_c() + 5.0).abs() < 1e-9, "mid {mid}: {}", m.mtm_c());
+        }
+        // One unpaired YES bought at 20, marked at the mid.
+        let mut n = Mkt { yes_ct: 1.0, flow_c: -20.0, last_mid: 35.0, ..Default::default() };
+        assert!((n.mtm_c() - 15.0).abs() < 1e-9);
+        n.last_mid = 0.0;
+        assert!((n.mtm_c() + 20.0).abs() < 1e-9);
+    }
 }
