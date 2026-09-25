@@ -8,8 +8,9 @@
 //! Guardrails (each one a past incident in this repo's memory):
 //! - orders keyed by client_order_id, never by ticker;
 //! - position from the venue's own fill messages (`post_position_fp`), not from our arithmetic;
-//! - loss cap on venue equity (balance + position exposure), read the same way at start and
-//!   during the run, PLUS a cumulative cap persisted across restarts in `live_state.json`;
+//! - session loss cap on the engine's OWN fill ledger marked to mid (a pair is worth exactly 100
+//!   at any mid — venue position fields net pairs away), PLUS a cumulative cap anchored to a
+//!   venue baseline persisted across restarts in `live_state.json`;
 //! - every order in an order group whose contracts_limit makes the VENUE cancel us on a sweep;
 //! - posts gated on time-to-close at post time, resting orders pulled before close;
 //! - venue rejections are counted, never fatal; any feed break cancels everything first;
