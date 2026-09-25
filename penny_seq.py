@@ -9,12 +9,12 @@ import numpy as np
 import pandas as pd
 sys.path.insert(0, ".")
 from tox import close_utc, load, results  # noqa: E402
-from penny import LAG_US, tick_fp  # noqa: E402
+from penny import FLAT_1C, LAG_US, tick_fp  # noqa: E402
 
 MIN_ROOM = float(sys.argv[2]) if len(sys.argv) > 2 else 2.0
 
 
-def sim_market(bb, tt, close_us):
+def sim_market(bb, tt, close_us, flat=False):
     bb = bb.sort_values("vt")
     bb = bb[(bb.bid > 0) & (bb.ask > 0)]
     if len(bb) < 20 or len(tt) == 0:
@@ -37,7 +37,7 @@ def sim_market(bb, tt, close_us):
         if i < 0 or i != j:
             continue
         b, a = bid[i], ask[i]
-        tk = int(tick_fp(a if side == "yes" else b))
+        tk = int(tick_fp(a if side == "yes" else b, flat))
         if (a - b) < MIN_ROOM * tk:
             continue
         i1 = max(np.searchsorted(bvt, v - LAG_US - 1_000_000, side="right") - 1, 0)
@@ -66,8 +66,8 @@ for tk, tt in t.groupby("ticker"):
     y = {"yes": 1.0, "no": 0.0}.get(res.get(tk, ""))
     if y is None:
         continue
-    for v, s, P, mk in sim_market(b[b.ticker == tk], tt, close_utc(tk)):
-        rows.append({"ticker": tk, "vt": v, "settle": s * (P - 100 * y), "mk60s": mk})
+    for v, s, P, mk in sim_market(b[b.ticker == tk], tt, close_utc(tk), tk.split("-")[0] in FLAT_1C):
+        rows.append({"ticker": tk, "vt": v, "P": P, "settle": s * (P - 100 * y), "mk60s": mk})
 d = pd.DataFrame(rows)
 d["half"] = np.where(d.vt < d.vt.median(), "H1", "H2")
 all_mkts = sorted(t.ticker.unique())
@@ -79,3 +79,14 @@ for h in ["H1", "H2", None]:
     pm = x.groupby("ticker").settle.sum()
     print(f"  {h or 'ALL'}: {pm.mean():+.1f} ± {pm.std(ddof=1)/np.sqrt(len(pm)):.1f} c/market over {len(pm)} markets"
           f"  (${pm.sum()/100:+.2f} total)")
+
+# By series and by price band of the fill (exploratory; SE clustered by market).
+d["series"] = d.ticker.str.split("-").str[0]
+d["band"] = pd.cut(d.P, [0, 10, 90, 100], labels=["wing<10", "mid", "wing>90"])
+for key in ["series", "band"]:
+    print(f"\n  by {key}:")
+    for k, x in d.groupby(key, observed=True):
+        pm = x.groupby("ticker").settle.sum()
+        h = x.groupby("half").settle.sum() / x.groupby("half").ticker.nunique()
+        print(f"    {k:12s} fills {len(x):6d}  {pm.mean():+6.1f} ± {pm.std(ddof=1)/np.sqrt(len(pm)):4.1f} c/mkt  "
+              f"H1 {h.get('H1', np.nan):+6.1f}  H2 {h.get('H2', np.nan):+6.1f}  mk60 {x.mk60s.mean():+.3f} c/ct")

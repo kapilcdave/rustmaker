@@ -19,8 +19,14 @@ from tox import cluster_se, close_utc, load, results  # noqa: E402
 LAG_US = 11_000  # our measured decision → book time (feed 6.2 + create 4.9)
 
 
-def tick_fp(price_fp):
+# Series on a flat 1c grid at every price (venue `price_ranges`, checked 2026-09-24).
+FLAT_1C = ("KXCOPPER15M", "KXNATGAS15M")
+
+
+def tick_fp(price_fp, flat=False):
     # 1e-4 dollar units: 10 = 0.1 c, 100 = 1 c
+    if flat:
+        return np.full(np.shape(price_fp), 100)
     return np.where((price_fp < 1000) | (price_fp > 9000), 10, 100)
 
 
