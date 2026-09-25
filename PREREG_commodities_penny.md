@@ -40,3 +40,11 @@ Latencies: create 5.44 ms, cancel 4.43 ms. Queue: pro-rata cancels. Series: all 
 - Our quote is not in the book, so no competitor re-pennies us and no taker reacts to our better
   price. A real inside quote gets jumped. The ~7.7 ms competitors will re-penny us on crypto.
 - Fills at our improved price are credited whenever a taker trades at or through it.
+
+## Status: PARKED 2026-09-25 03:24Z (by the user), no decision
+The shadow started 2026-09-24 23:06Z. It was stopped with SIGINT at 4.3 h of the 12 h window, so the
+window is incomplete and this prereg has NOT been evaluated. The tape `shadow_1790291214748.csv.gz`
+(17 MB, gzip-verified) is unscored and not in git (data/ is ignored). It is on the box and in a local copy.
+Penny arms were heavily throttled at 300 tokens/s (at 4 h: penny5 105k, penny2 240k, penny5_ng 264k,
+penny2_ng 557k) because an inside quote re-prices on every touch move. If resumed, this tape is
+exploratory only, and the decision needs a fresh full 12 h window under this same frozen rule.
