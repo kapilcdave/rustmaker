@@ -138,9 +138,11 @@ async fn main() -> Result<()> {
                 exchange_index: num("--exchange-index", 2.0)? as i64,
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/live".into())),
                 penny_room: num("--penny-room", 0.0)? as i64,
+                open_cutoff_s: num("--open-cutoff-s", 120.0)? as i64,
             };
             live::run(load_auth()?, params).await
         }
+        Some("cancel-all") => live::cancel_all(load_auth()?, 2).await,
         Some("latency") => {
             let n: usize = flag("--n").map_or(Ok(50), |m| m.parse())?;
             latency::run(load_auth()?, n).await
