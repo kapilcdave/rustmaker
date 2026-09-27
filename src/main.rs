@@ -11,6 +11,7 @@ mod book;
 mod latency;
 mod live;
 mod shadow;
+mod sports;
 mod stats;
 
 use std::{
@@ -75,6 +76,22 @@ async fn main() -> Result<()> {
             .cloned()
     };
     match args.get(1).map(String::as_str) {
+        Some("sports-scan") => {
+            let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/sports".into()));
+            sports::scan(&out).await
+        }
+        Some("sports-shadow") => {
+            let series = sports::parse_series(&flag("--series").context("sports-shadow requires --series A,B (use sports-scan to find sports series)")?)?;
+            let width: i64 = flag("--min-spread-c").map_or(Ok(20), |v| v.parse())?;
+            anyhow::ensure!((1..=99).contains(&width), "--min-spread-c must be 1..99");
+            let minutes: u64 = flag("--minutes").map_or(Ok(60), |v| v.parse())?;
+            anyhow::ensure!((1..=1440).contains(&minutes), "--minutes must be 1..1440");
+            let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/sports".into()));
+            sports::validate(&series, &out).await?;
+            shadow::run(load_auth()?, out, minutes, shadow::Params {
+                series, sports_min_spread_c: Some(width), sports_tag: flag("--tag"), ..Default::default()
+            }).await
+        }
         Some("probe") => {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
@@ -101,12 +118,17 @@ async fn main() -> Result<()> {
         Some("shadow") => {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/shadow".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
+            let clip_ladder = args.iter().any(|a| a == "--clip-ladder");
+            anyhow::ensure!(!(clip_ladder && args.iter().any(|a| a == "--only-base")),
+                "--clip-ladder and --only-base are mutually exclusive");
             let p = shadow::Params {
                 series: flag("--series").map_or_else(
                     || SERIES.iter().map(|s| s.to_string()).collect(),
                     |v| v.split(',').map(str::to_owned).collect(),
                 ),
                 only_base: args.iter().any(|a| a == "--only-base"),
+                clip_ladder,
+                stop_before_close_s: flag("--stop-before-close-s").map_or(Ok(120), |v| v.parse())?,
                 ..shadow::Params::default()
             };
             shadow::run(load_auth()?, out, minutes, p).await
@@ -125,12 +147,14 @@ async fn main() -> Result<()> {
                     .collect(),
                 minutes: num("--minutes", 120.0)? as u64,
                 max_pos_fp: (num("--max-pos", 1.0)? * book::SIZE_SCALE as f64) as i64,
+                clip_fp: (num("--clip", 1.0)? * book::SIZE_SCALE as f64) as i64,
                 session_max_loss_c: num("--max-loss-c", 200.0)?,
                 cumulative_max_loss_c: num("--cum-max-loss-c", 300.0)?,
                 // Clip 1 and |pos| <= 1 already bound what a sweep can take; the group catches a
                 // runaway loop. 4 tripped on ordinary flow (5 fills / 6 s across 3 markets).
                 group_contracts_per_15s: num("--group-limit", 12.0)? as i64,
-                stop_before_close_s: 120,
+                // Pull every resting order and post nothing (open OR close) this close to expiry.
+                stop_before_close_s: num("--stop-before-close-s", 120.0)? as i64,
                 mid_lo_c: 15.0,
                 mid_hi_c: 85.0,
                 mom_pull_c: 0.25,
@@ -139,10 +163,119 @@ async fn main() -> Result<()> {
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/live".into())),
                 penny_room: num("--penny-room", 0.0)? as i64,
                 open_cutoff_s: num("--open-cutoff-s", 120.0)? as i64,
+                amend: args.iter().any(|a| a == "--amend"),
+                spot_bps: num("--spot-bps", 0.0)?,
+                sports: None,
             };
-            live::run(load_auth()?, params).await
+            live::run(load_auth()?, params).await.map(|_| ())
         }
-        Some("cancel-all") => live::cancel_all(load_auth()?, 2).await,
+        Some("sports-live") => {
+            // ARMED sports maker: REAL orders on fee-free segment books, one tick inside a wide
+            // touch, games paused off their full-game books. Requires --armed.
+            let dry = args.iter().any(|a| a == "--dry-run");
+            if !dry && !args.iter().any(|a| a == "--armed") {
+                bail!("sports-live places REAL orders; pass --armed to confirm (or --dry-run to send nothing)");
+            }
+            live::DRY.store(dry, std::sync::atomic::Ordering::Relaxed);
+            if dry { eprintln!("DRY RUN: no order, amend, cancel or order group is sent"); }
+            let num = |name: &str, default: f64| flag(name).map_or(Ok(default), |v| v.parse::<f64>());
+            let auto = flag("--series").as_deref() == Some("auto");
+            let (series, parents, tags, auto_series) = if auto {
+                let free = sports::free_series().await?;
+                eprintln!("auto: {} fee-free sports series eligible", free.len());
+                (vec!["AUTO".to_owned()], Vec::new(), Vec::new(), Some(free))
+            } else {
+                let series = sports::parse_series(&flag("--series").context("--series A,B|auto required")?)?;
+                let parents = sports::parse_series(&flag("--parents").context("--parents A,B required (the full-game books of the same games)")?)?;
+                let tags: Vec<String> = flag("--tag").context("--tag 26SEP27[,26SEP28] required")?.split(',').map(str::to_owned).collect();
+                sports::validate(&series, &PathBuf::from(flag("--out").unwrap_or_else(|| "data/sports-live".into()))).await?;
+                for (s, fee) in &sports::fee_types(&series).await? {
+                    anyhow::ensure!(fee == "quadratic", "{s} bills the maker ({fee}); sports-live quotes fee-free series only");
+                }
+                (series, parents, tags, None)
+            };
+            let ct = |v: f64| (v * book::SIZE_SCALE as f64) as i64;
+            let params = live::LiveParams {
+                series,
+                minutes: num("--minutes", 120.0)? as u64,
+                max_pos_fp: ct(num("--max-pos", 1.0)?),
+                clip_fp: ct(num("--clip", 1.0)?),
+                session_max_loss_c: num("--max-loss-c", 300.0)?,
+                cumulative_max_loss_c: num("--cum-max-loss-c", 500.0)?,
+                group_contracts_per_15s: num("--group-limit", 4.0)? as i64,
+                stop_before_close_s: 0,
+                mid_lo_c: num("--mid-lo-c", 5.0)?,
+                mid_hi_c: num("--mid-hi-c", 95.0)?,
+                mom_pull_c: num("--mom-pull-c", 0.25)?,
+                thin_pull: num("--thin-pull", 0.9213)?,
+                exchange_index: num("--exchange-index", 0.0)? as i64,
+                out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/sports-live".into())),
+                penny_room: 1,
+                open_cutoff_s: 0,
+                amend: !args.iter().any(|a| a == "--no-amend"),
+                spot_bps: 0.0,
+                sports: Some(live::SportsLive {
+                    tags,
+                    parents,
+                    min_spread_c: num("--min-spread-c", 2.0)? as i64,
+                    penny_min_c: num("--penny-min-c", 3.0)? as i64,
+                    max_open_spread_c: num("--max-open-spread-c", 10.0)? as i64,
+                    exit_edge_c: num("--exit-edge-c", 1.0)? as i64,
+                    scratch_us: (num("--scratch-s", 60.0)? * 1e6) as i64,
+                    bail_us: (num("--bail-s", 180.0)? * 1e6) as i64,
+                    parent_move_c: num("--parent-move-c", 3.0)?,
+                    parent_window_us: (num("--parent-window-s", 10.0)? * 1e6) as i64,
+                    jump_c: num("--jump-c", 5.0)?,
+                    pause_us: (num("--pause-s", 30.0)? * 1e6) as i64,
+                    max_game_fp: ct(num("--max-game-ct", 3.0)?),
+                    max_total_fp: ct(num("--max-total-ct", 8.0)?),
+                    max_markets: num("--max-markets", 250.0)? as usize,
+                    refresh_s: num("--refresh-s", if auto { 180.0 } else { 60.0 })? as u64,
+                    auto_series,
+                    min_v24: num("--min-v24", 500.0)?,
+                }),
+            };
+            let reason = live::run(load_auth()?, params).await?;
+            // A loss-cap stop must not be restarted by a supervisor (systemd RestartPreventExitStatus=3).
+            if reason.contains("loss cap") { eprintln!("exit 3: {reason}"); std::process::exit(3); }
+            Ok(())
+        }
+        Some("balance") => {
+            // Read-only: per-shard cash, open positions, resting orders.
+            let (auth, http) = (load_auth()?, client()?);
+            for path in ["/portfolio/balance", "/portfolio/positions?count_filter=position&limit=200", "/portfolio/orders?status=resting&limit=200"] {
+                println!("{path}\n{}", serde_json::to_string_pretty(&live::signed(&http, &auth, "GET", path, None).await?)?);
+            }
+            Ok(())
+        }
+        Some("shard-transfer") => {
+            // Moves money between exchange shards. Amount in DOLLARS; the venue takes CENTICENTS.
+            // Non-atomic on the venue side: always re-read the breakdown, trust the total.
+            let (auth, http) = (load_auth()?, client()?);
+            let from: i64 = flag("--from").context("--from SHARD")?.parse()?;
+            let to: i64 = flag("--to").context("--to SHARD")?.parse()?;
+            let dollars: f64 = flag("--dollars").context("--dollars D")?.parse()?;
+            anyhow::ensure!(from != to && dollars > 0.0 && dollars <= 500.0, "bad transfer arguments");
+            let bal = live::signed(&http, &auth, "GET", "/portfolio/balance", None).await?;
+            let avail: f64 = bal["balance_breakdown"].as_array().into_iter().flatten()
+                .find(|b| b["exchange_index"].as_i64() == Some(from))
+                .and_then(|b| b["balance"].as_str()?.parse().ok()).context("source shard not in breakdown")?;
+            anyhow::ensure!(dollars <= avail + 1e-9, "shard {from} holds ${avail:.4}, less than ${dollars:.2}");
+            let body = json!({"source": "event_contract", "destination": "event_contract",
+                "amount": (dollars * 10_000.0).round() as i64,
+                "source_exchange_shard": from, "destination_exchange_shard": to,
+                "source_subaccount": 0, "destination_subaccount": 0});
+            println!("POST /portfolio/intra_exchange_instance_transfer {body}");
+            if !args.iter().any(|a| a == "--go") { println!("not sent; pass --go"); return Ok(()); }
+            println!("{}", live::signed(&http, &auth, "POST", "/portfolio/intra_exchange_instance_transfer", Some(&body)).await?);
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let b = live::signed(&http, &auth, "GET", "/portfolio/balance", None).await?;
+                println!("{} {}", b["balance_dollars"], b["balance_breakdown"]);
+            }
+            Ok(())
+        }
+        Some("cancel-all") => live::cancel_all(load_auth()?, flag("--exchange-index").map_or(Ok(2), |v| v.parse())?).await,
         Some("latency") => {
             let n: usize = flag("--n").map_or(Ok(50), |m| m.parse())?;
             latency::run(load_auth()?, n).await
@@ -164,7 +297,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some("rtt") => rtt(flag("--n").map_or(Ok(300), |m| m.parse())?).await,
-        _ => bail!("usage: kalshi-mm15 probe --out DIR --minutes N [--dump N] | rtt --n N"),
+        _ => bail!("usage: kalshi-mm15 probe --out DIR --minutes N [--dump N] | rtt --n N | sports-scan [--out DIR] | sports-shadow --series A,B [--min-spread-c 20] [--minutes 60] [--out DIR] [--tag 26SEP26] [--env-file PATH]"),
     }
 }
 

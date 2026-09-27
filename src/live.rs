@@ -1,6 +1,6 @@
 //! ARMED market maker. Places REAL orders. Same quoting rule as `shadow` (gate: join the touch
 //! on both sides of mid-band markets, pull a side when 1 s momentum runs into it or it is nearly
-//! empty), clip 1, |position| <= max_pos per market, flat-or-hold to settlement (never crosses).
+//! empty), clip `--clip` (default 1), |position| <= max_pos per market, flat-or-hold to settlement (never crosses).
 //!
 //! Purpose of the first runs: measure REAL fills — in particular how much of the queue ahead of
 //! us at join time clears by CANCELS rather than trades (the shadow assumed none did).
@@ -42,6 +42,8 @@ pub struct LiveParams {
     pub series: Vec<String>,
     pub minutes: u64,
     pub max_pos_fp: i64,
+    /// Contracts per order (SIZE_SCALE units). |position| + clip must stay within max_pos.
+    pub clip_fp: i64,
     pub session_max_loss_c: f64,
     pub cumulative_max_loss_c: f64,
     pub group_contracts_per_15s: i64,
@@ -59,7 +61,57 @@ pub struct LiveParams {
     /// that reduce the position keep quoting until `stop_before_close_s`. 450 s cut live
     /// leftovers 126 → 15 ct over 197 markets (`leftover_rules.py`, 2026-09-25).
     pub open_cutoff_s: i64,
+    /// Requote an untouched resting order with one amend (same order_id, measured 2026-09-26)
+    /// instead of cancel + create.
+    pub amend: bool,
+    /// Pull the side a Coinbase move of more than this many bps over 1 s runs into, on the spot
+    /// tick itself. 0 = off.
+    pub spot_bps: f64,
+    /// Sports mode: many markets per series, game-level pauses off the parent (full-game) books,
+    /// per-game and total worst-case contract caps. None = the 15M crypto engine.
+    pub sports: Option<SportsLive>,
 }
+
+pub struct SportsLive {
+    /// Only tickers containing `-<tag>` for one of these (game dates like 26SEP27).
+    pub tags: Vec<String>,
+    /// Full-game series watched as a score feed and never quoted (e.g. KXNCAAFGAME,KXNCAAFTOTAL).
+    pub parents: Vec<String>,
+    /// Quote only when the OTHERS' spread is at least this wide (cents), one tick inside it.
+    pub min_spread_c: i64,
+    /// Pause a game when any of its parent books' mid moves this much (cents) within the window.
+    pub parent_move_c: f64,
+    pub parent_window_us: i64,
+    /// Pause a game when one of its quoted books' mid jumps this much (cents) within 2 s.
+    pub jump_c: f64,
+    pub pause_us: i64,
+    /// Worst-case contracts per game / in total, assuming every resting order of one side fills
+    /// (a score sweeps a whole strike ladder the same way).
+    pub max_game_fp: i64,
+    pub max_total_fp: i64,
+    pub max_markets: usize,
+    pub refresh_s: u64,
+    /// Go one tick inside when the others' spread is at least this (cents); below it, join.
+    pub penny_min_c: i64,
+    /// Open only on books at most this wide (cents): a fill on a wider book is a directional
+    /// entry with no realistic second leg.
+    pub max_open_spread_c: i64,
+    /// Round trip: after an opening fill, only the flattening side quotes, at entry +/- this
+    /// edge (cents) until `scratch_us`, then at the entry price until `bail_us`, then at the
+    /// competitive price whatever it costs. Always post-only; never crosses.
+    pub exit_edge_c: i64,
+    pub scratch_us: i64,
+    pub bail_us: i64,
+    /// `--series auto`: discover across every fee-free sports series (this set), in the
+    /// background, ranked by 24h volume; tags are the rolling UTC dates (yesterday..tomorrow).
+    pub auto_series: Option<std::collections::HashSet<String>>,
+    pub min_v24: f64,
+}
+
+/// --dry-run: no order-group create, no order, amend or cancel is sent; acks are synthesized
+/// locally so the whole decision path (discovery, pauses, caps) runs against the live feed.
+pub static DRY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn dry() -> bool { DRY.load(std::sync::atomic::Ordering::Relaxed) }
 
 const BID: usize = 0;
 const ASK: usize = 1;
@@ -69,6 +121,8 @@ enum St {
     PendingNew,
     Resting,
     PendingCancel,
+    /// Amend in flight: still resting at `price` until the ack.
+    PendingAmend,
 }
 
 struct LiveOrder {
@@ -78,6 +132,9 @@ struct LiveOrder {
     side: usize,
     price: i64,
     st: St,
+    /// Unfilled size resting at the venue, from `remaining_count_fp`. A half-filled clip-2 order
+    /// holds 1 ct at our price, and only that much is ours to remove when reading the others' book.
+    remaining_fp: i64,
 }
 
 #[derive(Default)]
@@ -97,10 +154,30 @@ struct Mkt {
     /// (the position authority) has landed. The `user_order` "executed" message can arrive first,
     /// free the slot, and let a new order post on a stale position (NEAR reached +2, 2026-09-25).
     hold_until_us: i64,
+    /// The venue's price grid, (start, end, step) in PRICE_SCALE units, from `price_ranges`.
+    /// Crypto and GOLD/SILVER/WTI step 0.1c below 10c and above 90c; COPPER/NATGAS step 1c
+    /// everywhere, so the wing tick must never be assumed.
+    ranges: Vec<(i64, i64, i64)>,
+    /// Sports: the game key (ticker's second token) and whether this is a watched parent book.
+    game: String,
+    parent: bool,
+    /// Sports: opening fill price (PRICE_SCALE, YES terms) and time, for the flattening quote.
+    entry_px: i64,
+    entry_us: i64,
+    /// Others' touch in cents, for a mark at the price we could exit at, not the mid.
+    last_bid: f64,
+    last_ask: f64,
+    conservative: bool,
 }
 
 impl Mkt {
     fn mtm_c(&self) -> f64 {
+        if self.conservative && self.last_bid > 0.0 && self.last_ask > 0.0 {
+            // A YES+NO pair is exactly 100; the unpaired rest is marked where it could be sold.
+            let pairs = self.yes_ct.min(self.no_ct);
+            return self.flow_c + pairs * 100.0 + (self.yes_ct - pairs) * self.last_bid
+                + (self.no_ct - pairs) * (100.0 - self.last_ask);
+        }
         self.flow_c + self.yes_ct * self.last_mid + self.no_ct * (100.0 - self.last_mid)
     }
 
@@ -113,6 +190,7 @@ impl Mkt {
 enum Done {
     Created { coid: String, res: Result<Value> },
     Cancelled { coid: String, res: Result<Value> },
+    Amended { coid: String, price: i64, res: Result<Value> },
 }
 
 /// Gzipped JSONL. A 3 h, 9-series run wrote 431 MB uncompressed (the box has ~3 GB free);
@@ -134,7 +212,10 @@ impl Journal {
     }
 }
 
-pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
+pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
+    if p.clip_fp <= 0 || p.clip_fp > p.max_pos_fp {
+        bail!("--clip must be > 0 and <= --max-pos (clip {} ct, max-pos {} ct)", p.clip_fp as f64 / SIZE_SCALE as f64, p.max_pos_fp as f64 / SIZE_SCALE as f64);
+    }
     fs::create_dir_all(&p.out)?;
     let auth = Arc::new(auth);
     let http = client()?;
@@ -162,13 +243,18 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     j.row("start", json!({"equity_c": equity0, "baseline_c": baseline, "series": p.series}));
 
     // ---- venue-side kill switch ----
-    let group = signed(&http, &auth, "POST", "/portfolio/order_groups/create",
-        Some(&json!({"contracts_limit": p.group_contracts_per_15s, "exchange_index": p.exchange_index}))).await?;
+    let group = if dry() { json!({"order_group_id": "dry-run"}) } else { signed(&http, &auth, "POST", "/portfolio/order_groups/create",
+        Some(&json!({"contracts_limit": p.group_contracts_per_15s, "exchange_index": p.exchange_index}))).await? };
     let mut group_id = group["order_group_id"].as_str().context("order group id")?.to_owned();
     eprintln!("order group {group_id}: venue cancels all at {} contracts matched / 15 s", p.group_contracts_per_15s);
     j.row("order_group", group.clone());
 
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Done>();
+    let (spot_tx, mut spot_rx) = mpsc::channel::<crate::shadow::SpotTick>(65_536);
+    let spot_task = (p.spot_bps > 0.0).then(|| tokio::spawn(crate::shadow::spot_feed(spot_tx, p.series.clone())));
+    let mut spot: HashMap<String, VecDeque<(i64, f64)>> = HashMap::new();
+    let mut spot_pulls = 0u64;
+    let mut amends = 0u64;
     let mut orders: HashMap<String, LiveOrder> = HashMap::new();
     let mut markets: HashMap<String, Mkt> = HashMap::new();
     let mut tokens = 900.0f64;
@@ -187,10 +273,33 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(p.minutes * 60);
     let mut stop_reason = String::from("deadline");
+    let mut game_pause: HashMap<String, i64> = HashMap::new();
+    let mut parent_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let (mut game_pauses, mut jump_pauses) = (0u64, 0u64);
+    let mut last_sports_refresh = Instant::now();
+    let (mut round_trips, mut rt_pnl_c) = (0u64, 0.0f64);
+    // Auto discovery runs off the loop: a full sweep of open sports events takes tens of seconds.
+    let (auto_tx, mut auto_rx) = mpsc::channel::<Vec<Value>>(2);
+    let auto_task = p.sports.as_ref().and_then(|c| c.auto_series.clone().map(|set| {
+        let (http, tx, xi, refresh, max_sp, min_v) = (http.clone(), auto_tx.clone(), p.exchange_index, c.refresh_s, c.max_open_spread_c, c.min_v24);
+        tokio::spawn(async move { auto_discover(http, set, xi, refresh, max_sp, min_v, tx).await })
+    }));
+    let mut auto_latest: Vec<Value> = Vec::new();
+    if auto_task.is_some() {
+        eprintln!("auto discovery: first sweep...");
+        if let Some(v) = auto_rx.recv().await { auto_latest = v; }
+    }
 
+    // nohup'd background jobs ignore SIGINT; SIGTERM must also cancel everything on the way out.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     'outer: while Instant::now() < deadline {
         // Discover the current open market per series (REST), then subscribe.
-        refresh_markets(&http, &p.series, &mut markets).await;
+        match &p.sports {
+            Some(cfg) if cfg.auto_series.is_some() => { apply_sports(auto_latest.iter().map(|m| (m.clone(), false)).collect(), cfg, &mut markets, &mut orders, &mut realized_c, &mut j, true); }
+            Some(cfg) => { refresh_sports(&http, &p.series, cfg, p.exchange_index, &mut markets, &mut orders, &mut realized_c, &mut j).await; }
+            None => refresh_markets(&http, &p.series, &mut markets).await,
+        }
+        parent_seen.clear();
         sync_positions(&http, &auth, &mut markets).await?;
         let (mut ws, _) = match connect_async(signed_ws_request(&auth)?).await {
             Ok(x) => x,
@@ -238,6 +347,26 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                                 release(&mut orders, &mut markets, &coid);
                             }
                         },
+                        Done::Amended { coid, price, res } => {
+                            match res {
+                                Ok(v) => {
+                                    j.row("ack_amend", json!({"coid": coid, "price": price, "resp": v}));
+                                    if let Some(o) = orders.get_mut(&coid) {
+                                        if o.st == St::PendingAmend { o.st = St::Resting; o.price = price; }
+                                    }
+                                }
+                                Err(e) => {
+                                    rejects += 1;
+                                    let es = format!("{e:#}");
+                                    j.row("reject_amend", json!({"coid": coid, "err": es}));
+                                    if es.contains("404") || es.contains("not_found") {
+                                        release(&mut orders, &mut markets, &coid); // filled or gone
+                                    } else if let Some(o) = orders.get_mut(&coid) {
+                                        if o.st == St::PendingAmend { o.st = St::Resting; } // still at the old price
+                                    }
+                                }
+                            }
+                        }
                         Done::Cancelled { coid, res } => {
                             match &res {
                                 Ok(v) => j.row("ack_cancel", json!({"coid": coid, "resp": v})),
@@ -246,6 +375,18 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                             // Either way the order is gone or already terminal (filled/cancelled);
                             // user_orders is the authority and will also release it.
                             release(&mut orders, &mut markets, &coid);
+                        }
+                    }
+                    continue;
+                }
+                v = auto_rx.recv(), if auto_task.is_some() => {
+                    let Some(v) = v else { continue };
+                    if let Some(cfg) = &p.sports {
+                        let new = apply_sports(v.into_iter().map(|m| (m, false)).collect(), cfg, &mut markets, &mut orders, &mut realized_c, &mut j, true);
+                        if !new.is_empty() {
+                            ws.send(Message::Text(json!({"id": next_id, "cmd": "subscribe", "params": {
+                                "channels": ["orderbook_delta", "trade"], "market_tickers": new, "use_yes_price": true}}).to_string().into())).await?;
+                            next_id += 1;
                         }
                     }
                     continue;
@@ -264,7 +405,17 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                         realized_c += m.mtm_c();
                     }
                     markets.retain(|_, m| now_ms < m.close_unix_ms + 5_000);
-                    if markets.len() != before || markets.len() < p.series.len() {
+                    if let Some(cfg) = &p.sports {
+                        if cfg.auto_series.is_none() && last_sports_refresh.elapsed().as_secs() >= cfg.refresh_s {
+                            last_sports_refresh = Instant::now();
+                            let new = refresh_sports(&http, &p.series, cfg, p.exchange_index, &mut markets, &mut orders, &mut realized_c, &mut j).await;
+                            if !new.is_empty() {
+                                ws.send(Message::Text(json!({"id": next_id, "cmd": "subscribe", "params": {
+                                    "channels": ["orderbook_delta", "trade"], "market_tickers": new, "use_yes_price": true}}).to_string().into())).await?;
+                                next_id += 1;
+                            }
+                        }
+                    } else if markets.len() != before || markets.len() < p.series.len() {
                         let old: Vec<String> = markets.keys().cloned().collect();
                         refresh_markets(&http, &p.series, &mut markets).await;
                         if let Err(e) = sync_positions(&http, &auth, &mut markets).await { eprintln!("positions: {e:#}"); }
@@ -303,6 +454,32 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     if Instant::now() >= deadline { break 'outer; }
                     continue;
                 }
+                sp = spot_rx.recv(), if p.spot_bps > 0.0 => {
+                    let Some(sp) = sp else { continue };
+                    j.row("X", json!([sp.series, sp.recv_us, sp.mid, sp.exch_ms]));
+                    let h = spot.entry(sp.series.clone()).or_default();
+                    h.push_back((sp.recv_us, sp.mid));
+                    while h.front().is_some_and(|(t, _)| *t < sp.recv_us - 10_000_000) { h.pop_front(); }
+                    let Some(r) = crate::shadow::spot_ret_bps(h, sp.recv_us, 1_000_000) else { continue };
+                    if r.abs() <= p.spot_bps { continue; }
+                    // Spot up = YES worth more: our ask is stale. Pull it now, not at the next
+                    // Kalshi message (the Kalshi book is what lags).
+                    let side = if r > 0.0 { ASK } else { BID };
+                    let prefix = format!("{}-", sp.series);
+                    let victims: Vec<String> = markets.iter()
+                        .filter(|(t, _)| t.starts_with(&prefix))
+                        .filter_map(|(_, m)| m.slots[side].clone())
+                        .filter(|c| orders.get(c).is_some_and(|o| o.st != St::PendingCancel))
+                        .collect();
+                    for c in victims {
+                        if tokens < 2.0 { break; }
+                        tokens -= 2.0;
+                        spot_pulls += 1;
+                        j.row("spot_pull", json!({"coid": c, "r_bps": r}));
+                        request_cancel(&http, &auth, &done_tx, &mut orders, &c, p.exchange_index, &mut cancels);
+                    }
+                    continue;
+                }
                 _ = equity_tick.tick() => {
                     // Caps run on OUR ledger, marked to mid (a pair is exactly 100): the venue's
                     // position fields net pairs away, which read as a phantom −$6 on 2026-09-25.
@@ -310,13 +487,19 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     let cumulative = equity0 - baseline + session;
                     let venue = equity_c(&http, &auth, p.exchange_index).await.ok();
                     j.row("equity", json!({"session_mtm_c": session, "cumulative_c": cumulative, "venue_cash_plus_net_exposure_c": venue}));
-                    eprintln!("[{}s] session {:+.2}c cumulative {:+.2}c (venue cash+net exposure {:.2}c) | posts={} cancels={} rejects={} fills={} group_trips={} undercuts={} resting={}",
-                        started.elapsed().as_secs(), session, cumulative, venue.unwrap_or(f64::NAN), posts, cancels, rejects, fills, group_trips, undercuts, orders.len());
+                    eprintln!("[{}s] session {:+.2}c cumulative {:+.2}c (venue cash+net exposure {:.2}c) | posts={} cancels={} amends={} spot_pulls={} rejects={} fills={} group_trips={} undercuts={} resting={}",
+                        started.elapsed().as_secs(), session, cumulative, venue.unwrap_or(f64::NAN), posts, cancels, amends, spot_pulls, rejects, fills, group_trips, undercuts, orders.len());
+                    if p.sports.is_some() {
+                        let open_pos: f64 = markets.values().map(|m| m.pos_fp.abs() as f64).sum::<f64>() / SIZE_SCALE as f64;
+                        eprintln!("        sports: markets={} quotable={} games_with_parent_seen={} game_pauses={} jump_pauses={} open_abs_pos_ct={:.0} round_trips={} rt_pnl={:+.1}c",
+                            markets.len(), markets.values().filter(|m| !m.parent).count(), parent_seen.len(), game_pauses, jump_pauses, open_pos, round_trips, rt_pnl_c);
+                    }
                     if session < -p.session_max_loss_c { stop_reason = format!("session loss cap: {session:.2}c"); break 'outer; }
                     if cumulative < -p.cumulative_max_loss_c { stop_reason = format!("cumulative loss cap: {cumulative:.2}c"); break 'outer; }
                     continue;
                 }
                 _ = tokio::signal::ctrl_c() => { stop_reason = "ctrl-c".into(); break 'outer; }
+                _ = sigterm.recv() => { stop_reason = "sigterm".into(); break 'outer; }
             };
             let text = match msg {
                 Some(Ok(Message::Text(t))) => t,
@@ -348,7 +531,20 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                         if buy_yes { mk.yes_ct += ct; mk.flow_c -= px * ct; }
                         else { mk.no_ct += ct; mk.flow_c -= (100.0 - px) * ct; }
                         if let Ok(post) = parse_value(m.get("post_position_fp"), SIZE_SCALE) {
+                            let was = mk.pos_fp;
                             mk.pos_fp = post; // the venue's number, not ours
+                            if post == 0 && was != 0 && mk.entry_px > 0 {
+                                let exit = (px * 100.0).round() as i64;
+                                let pnl = if was > 0 { exit - mk.entry_px } else { mk.entry_px - exit } as f64 / 100.0;
+                                round_trips += 1;
+                                rt_pnl_c += pnl;
+                                j.row("round_trip", json!({"ticker": ticker, "entry": mk.entry_px, "exit": exit, "long": was > 0, "pnl_c": pnl, "held_s": (now - mk.entry_us) / 1_000_000}));
+                            }
+                            if post == 0 { mk.entry_px = 0; mk.entry_us = 0; }
+                            else if was == 0 || was.signum() != post.signum() {
+                                mk.entry_px = (px * 100.0).round() as i64;
+                                mk.entry_us = now;
+                            }
                         }
                     }
                     continue;
@@ -357,6 +553,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     j.row("user_order", m.clone());
                     let coid = m["client_order_id"].as_str().unwrap_or("").to_owned();
                     let st = m["status"].as_str().unwrap_or("");
+                    if let (Some(o), Ok(rem)) = (orders.get_mut(&coid), parse_value(m.get("remaining_count_fp"), SIZE_SCALE)) {
+                        o.remaining_fp = rem;
+                    }
                     if m["fill_count_fp"].as_str().is_some_and(|f| f != "0.00") {
                         let ticker = orders.get(&coid).map(|o| o.ticker.clone())
                             .or_else(|| m["ticker"].as_str().map(str::to_owned));
@@ -383,10 +582,24 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                 _ => {}
             }
             let Some(ticker) = m["market_ticker"].as_str() else { continue };
+            // Sports caps: worst-case contracts in every OTHER quoted market (this game, all games).
+            let exposure_elsewhere = p.sports.as_ref().map(|_| {
+                let game = ticker.split('-').nth(1).unwrap_or("");
+                let (mut g, mut t) = (0i64, 0i64);
+                for (tk, om) in markets.iter().filter(|(tk, om)| !om.parent && tk.as_str() != ticker) {
+                    let _ = tk;
+                    let rest = |k: usize| om.slots[k].as_ref().and_then(|c| orders.get(c)).map_or(0, |o| o.remaining_fp);
+                    let pot = (om.pos_fp + rest(BID)).abs().max((om.pos_fp - rest(ASK)).abs());
+                    t += pot;
+                    if om.game == game { g += pot; }
+                }
+                (g, t)
+            });
             let Some(mk) = markets.get_mut(ticker) else { continue };
             let vt = match kind {
                 "orderbook_snapshot" => {
                     mk.book = Book::from_snapshot(m).ok();
+                    if mk.parent && mk.book.is_some() { parent_seen.insert(mk.game.clone()); }
                     if let Some(t) = mk.book.as_ref().map(Book::touch) {
                         if let (Some(b), Some(a)) = (t.yes_bid_fp, t.yes_ask_fp) {
                             mk.last_mid = (b + a) as f64 / 200.0;
@@ -401,6 +614,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
             let Some(vt) = vt else { continue };
             let Some(book) = mk.book.as_mut() else { continue };
             if kind == "orderbook_delta" {
+                let previous_touch = book.touch();
                 let size_before = book.size_at(m["side"].as_str().unwrap_or(""),
                     parse_value(m.get("price_dollars"), PRICE_SCALE).unwrap_or(-1));
                 if let Err(e) = book.apply_delta(m) { eprintln!("delta {ticker}: {e:#}"); break; }
@@ -415,31 +629,71 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                     if mk.mids.back().is_none_or(|(_, x)| *x != mid) {
                         mk.mids.push_back((vt, mid));
                         mk.last_mid = mid;
+                    }
+                    // Preserve size-only changes for queue and capacity diagnostics.
+                    if t != previous_touch {
                         j.row("B", json!([ticker, vt, b, t.yes_bid_size_fp, a, t.yes_ask_size_fp]));
                     }
-                    while mk.mids.len() > 2 && mk.mids[1].0 < vt - 2_000_000 { mk.mids.pop_front(); }
+                    // Parents keep the whole move window; quoted books only need 2 s.
+                    let keep = p.sports.as_ref().filter(|_| mk.parent).map_or(2_000_000, |c| c.parent_window_us + 2_000_000);
+                    while mk.mids.len() > 2 && mk.mids[1].0 < vt - keep { mk.mids.pop_front(); }
                 }
             } else {
                 j.row("T", json!([ticker, vt, m["taker_side"], m["yes_price_dollars"], m["count_fp"]]));
             }
 
+            // ---- sports: a parent book is a score feed, never quoted ----
+            if let Some(cfg) = &p.sports {
+                if mk.parent {
+                    if kind != "orderbook_delta" { continue; }
+                    let (Some(m1), Some(m0)) = (mk.mids.back().map(|x| x.1), mk.mid_at(vt - cfg.parent_window_us)) else { continue };
+                    // A book pinned in a tail (both ends < 3c or > 97c) is a decided line, not news.
+                    if (m1 - m0).abs() < cfg.parent_move_c || m1.max(m0) < 3.0 || m1.min(m0) > 97.0 { continue; }
+                    let game = mk.game.clone();
+                    if game_pause.get(&game).is_some_and(|u| *u > now) { game_pause.insert(game, now + cfg.pause_us); continue; }
+                    game_pauses += 1;
+                    j.row("parent_pause", json!({"game": game, "parent": ticker, "from": m0, "to": m1, "vt": vt}));
+                    pause_game(&game, now + cfg.pause_us, &mut game_pause, &markets, &mut orders, &http, &auth, &done_tx, p.exchange_index, &mut cancels);
+                    continue;
+                }
+            }
             // ---- decide ----
             if group_tripped || now < mk.hold_until_us { continue; }
             tokens = (tokens + (now - last_refill) as f64 / 1e6 * 300.0).min(900.0);
             last_refill = now;
             // The market as OTHER participants make it: our own resting clip removed, or an
             // improved quote of ours would read as the touch and we would penny ourselves.
-            let own_px = |i: usize| mk.slots[i].as_ref().and_then(|c| orders.get(c)).map(|o| o.price);
-            let (own_bid, own_ask) = (own_px(BID), own_px(ASK));
+            let own = |i: usize| mk.slots[i].as_ref().and_then(|c| orders.get(c));
+            let (own_bid, own_ask) = (own(BID).map(|o| o.price), own(ASK).map(|o| o.price));
+            let own_sz = |i: usize| own(i).map_or(0, |o| o.remaining_fp);
             let (Some((bid, bsz)), Some((ask, asz))) = (
-                book.best_excluding("yes", own_bid, SIZE_SCALE),
-                book.best_excluding("no", own_ask, SIZE_SCALE),
+                book.best_excluding("yes", own_bid, own_sz(BID)),
+                book.best_excluding("no", own_ask, own_sz(ASK)),
             ) else { continue };
             let mid = (bid + ask) as f64 / 200.0;
+            mk.last_bid = bid as f64 / 100.0;
+            mk.last_ask = ask as f64 / 100.0;
             let mom = mk.mid_at(vt - 1_000_000).map(|m0| mid - m0).unwrap_or(0.0);
             let tot = (bsz + asz).max(1) as f64;
             let open_ok = mk.close_unix_ms - now / 1_000 > p.stop_before_close_s * 1_000;
             let postable = mid >= p.mid_lo_c && mid <= p.mid_hi_c && open_ok;
+            // Sports: a jump in this book pauses its whole game (a score moves every ladder).
+            let mut jump_game: Option<String> = None;
+            let mut sports_ok = true;
+            let mut sports_open = true;
+            if let Some(cfg) = &p.sports {
+                if let Some(m0) = mk.mid_at(vt - 2_000_000) {
+                    if (mid - m0).abs() >= cfg.jump_c && !game_pause.get(&mk.game).is_some_and(|u| *u > now) {
+                        jump_game = Some(mk.game.clone());
+                    }
+                }
+                sports_ok = jump_game.is_none()
+                    && (cfg.parents.is_empty() || parent_seen.contains(&mk.game))
+                    && !game_pause.get(&mk.game).is_some_and(|u| *u > now);
+                sports_open = sports_ok && ask - bid >= cfg.min_spread_c * 100
+                    && ask - bid <= cfg.max_open_spread_c * 100
+                    && mid >= p.mid_lo_c && mid <= p.mid_hi_c;
+            }
             // Diagnostic the shadow could not see: another maker improving past our live quote.
             for (i, own) in [(BID, own_bid), (ASK, own_ask)] {
                 let Some(px) = own else { continue };
@@ -454,32 +708,92 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
             }
             for i in [BID, ASK] {
                 let side_px = if i == BID { bid } else { ask };
-                let tick: i64 = if side_px < 1_000 || side_px > 9_000 { 10 } else { 100 };
-                let mut want = if p.penny_room > 0 {
+                // Improving a bid steps UP from its own level; improving an ask steps DOWN, so its
+                // step is the grid's just below it. At ask 0.9000 that is 1c, not the 0.1c above it:
+                // 0.8990 is not a price (1,649 invalid_price rejects on run 9, 2026-09-26).
+                let tick = if i == BID { tick_at(&mk.ranges, side_px) } else { tick_at(&mk.ranges, side_px - 1) };
+                // Sports: the flattening side only needs the game to be quiet; opening also needs
+                // width and the band.
+                let exiting = (i == ASK && mk.pos_fp > 0) || (i == BID && mk.pos_fp < 0);
+                let mut want = if p.sports.is_some() {
+                    if exiting { sports_ok } else { sports_open }
+                } else if p.penny_room > 0 {
                     open_ok && ask - bid >= p.penny_room * tick && mid > 1.0 && mid < 99.0
                 } else {
                     postable
                 };
                 // Count the clip we are about to post: a fractional position (−0.98 after a
                 // partial fill) must not admit a clip that ends at −1.98 (happened 2026-09-23).
-                if i == BID && mk.pos_fp + SIZE_SCALE > p.max_pos_fp { want = false; }
-                if i == ASK && mk.pos_fp - SIZE_SCALE < -p.max_pos_fp { want = false; }
+                if i == BID && mk.pos_fp + p.clip_fp > p.max_pos_fp { want = false; }
+                if i == ASK && mk.pos_fp - p.clip_fp < -p.max_pos_fp { want = false; }
                 // A bid opens/adds unless we are short; an ask opens/adds unless we are long.
                 let opens = if i == BID { mk.pos_fp >= 0 } else { mk.pos_fp <= 0 };
                 if opens && mk.close_unix_ms - now / 1_000 <= p.open_cutoff_s * 1_000 { want = false; }
+                if let (Some(cfg), true) = (&p.sports, want && opens) {
+                    // Worst case with THIS side resting: every other market of the game at its worst
+                    // one-sided outcome, this one with side i at a full clip.
+                    let rest = |k: usize| mk.slots[k].as_ref().and_then(|c| orders.get(c)).map_or(0, |o| o.remaining_fp);
+                    let (b, a) = if i == BID { (p.clip_fp, rest(ASK)) } else { (rest(BID), p.clip_fp) };
+                    let this = (mk.pos_fp + b).abs().max((mk.pos_fp - a).abs());
+                    let (g_other, t_other) = exposure_elsewhere.unwrap_or((0, 0));
+                    if g_other + this > cfg.max_game_fp || t_other + this > cfg.max_total_fp { want = false; }
+                }
                 let toxic = if i == ASK { mom > p.mom_pull_c || bsz as f64 / tot > p.thin_pull }
                             else { -mom > p.mom_pull_c || asz as f64 / tot > p.thin_pull };
                 if toxic { want = false; }
-                let target = match (p.penny_room > 0, i == BID) {
+                if want && p.spot_bps > 0.0 {
+                    let series = ticker.split('-').next().unwrap_or("");
+                    if let Some(r) = spot.get(series).and_then(|h| crate::shadow::spot_ret_bps(h, now, 1_000_000)) {
+                        if (i == ASK && r > p.spot_bps) || (i == BID && r < -p.spot_bps) { want = false; }
+                    }
+                }
+                let mut target = match (p.penny_room > 0, i == BID) {
                     (true, true) => bid + tick,
                     (true, false) => ask - tick,
                     (false, true) => bid,
                     (false, false) => ask,
                 };
+                if let Some(cfg) = &p.sports {
+                    // Inside only when there is room for both of our quotes plus a tick; else join.
+                    if ask - bid < cfg.penny_min_c * 100 { target = if i == BID { bid } else { ask }; }
+                    if exiting && mk.entry_px > 0 {
+                        let held = now - mk.entry_us;
+                        let edge = if held < cfg.scratch_us { cfg.exit_edge_c * 100 } else if held < cfg.bail_us { 0 } else { i64::MIN / 4 };
+                        if edge > i64::MIN / 4 {
+                            // Long YES: sell no lower than entry + edge. Short YES: buy no higher than entry - edge.
+                            target = if i == ASK { target.max(mk.entry_px + edge) } else { target.min(mk.entry_px - edge) };
+                        }
+                        // Post-only must not cross the others' opposite touch.
+                        target = if i == ASK { target.max(bid + tick) } else { target.min(ask - tick) };
+                    }
+                }
+                // Sports: our OWN price must sit in the band too (a 6c bid under a 30c ask has
+                // an in-band mid; the ledger's band was on the quote price).
+                if p.sports.is_some() && !exiting && ((target as f64) < p.mid_lo_c * 100.0 || (target as f64) > p.mid_hi_c * 100.0) { want = false; }
+                if target <= 0 || target >= PRICE_SCALE { want = false; }
                 let cur = mk.slots[i].as_ref().and_then(|c| orders.get(c));
                 match cur {
-                    Some(o) if o.st == St::PendingCancel || o.st == St::PendingNew => continue,
+                    Some(o) if matches!(o.st, St::PendingCancel | St::PendingNew | St::PendingAmend) => continue,
                     Some(o) if want && o.price == target => continue,
+                    // Untouched order, new price: one amend (keeps order_id) instead of two legs.
+                    // A partly filled order is cancelled instead: amend's `count` semantics on a
+                    // partial fill are unmeasured.
+                    Some(o) if want && p.amend && o.st == St::Resting && o.remaining_fp == p.clip_fp && o.order_id.is_some() => {
+                        if tokens < 10.0 { continue; }
+                        tokens -= 10.0;
+                        amends += 1;
+                        let (c, id) = (o.coid.clone(), o.order_id.clone().unwrap_or_default());
+                        let body = json!({"ticker": ticker, "side": if i == BID { "bid" } else { "ask" },
+                            "price": format!("{:.4}", target as f64 / PRICE_SCALE as f64),
+                            "count": format!("{:.2}", p.clip_fp as f64 / SIZE_SCALE as f64)});
+                        j.row("amend", json!({"coid": c, "body": body, "mid": mid}));
+                        if let Some(o) = orders.get_mut(&c) { o.st = St::PendingAmend; }
+                        let (http2, auth2, tx) = (http.clone(), auth.clone(), done_tx.clone());
+                        tokio::spawn(async move {
+                            let res = if dry() { Ok(json!({})) } else { signed(&http2, &auth2, "POST", &format!("/portfolio/events/orders/{id}/amend"), Some(&body)).await };
+                            let _ = tx.send(Done::Amended { coid: c, price: target, res });
+                        });
+                    }
                     Some(o) => {
                         if tokens < 2.0 { continue; }
                         tokens -= 2.0;
@@ -493,22 +807,27 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
                         let coid = crate::latency::random_id();
                         let body = json!({
                             "ticker": ticker, "client_order_id": coid, "side": if i == BID { "bid" } else { "ask" },
-                            "count": "1.00", "price": format!("{:.4}", target as f64 / PRICE_SCALE as f64),
+                            "count": format!("{:.2}", p.clip_fp as f64 / SIZE_SCALE as f64), "price": format!("{:.4}", target as f64 / PRICE_SCALE as f64),
                             "time_in_force": "good_till_canceled", "self_trade_prevention_type": "maker",
                             "post_only": true, "order_group_id": group_id, "exchange_index": p.exchange_index,
                         });
                         j.row("new", json!({"coid": coid, "body": body, "mid": mid, "mom": mom, "bsz": bsz, "asz": asz}));
                         orders.insert(coid.clone(), LiveOrder { coid: coid.clone(), order_id: None,
-                            ticker: ticker.to_owned(), side: i, price: target, st: St::PendingNew });
+                            ticker: ticker.to_owned(), side: i, price: target, st: St::PendingNew, remaining_fp: p.clip_fp });
                         mk.slots[i] = Some(coid.clone());
                         let (http2, auth2, tx) = (http.clone(), auth.clone(), done_tx.clone());
                         tokio::spawn(async move {
-                            let res = signed(&http2, &auth2, "POST", "/portfolio/events/orders", Some(&body)).await;
+                            let res = if dry() { Ok(json!({"order_id": body["client_order_id"].clone()})) } else { signed(&http2, &auth2, "POST", "/portfolio/events/orders", Some(&body)).await };
                             let _ = tx.send(Done::Created { coid, res });
                         });
                     }
                     None => {}
                 }
+            }
+            if let (Some(cfg), Some(game)) = (&p.sports, jump_game) {
+                jump_pauses += 1;
+                j.row("jump_pause", json!({"game": game, "ticker": ticker, "vt": vt}));
+                pause_game(&game, now + cfg.pause_us, &mut game_pause, &markets, &mut orders, &http, &auth, &done_tx, p.exchange_index, &mut cancels);
             }
         }
         // Feed broke: we are blind. Cancel everything before reconnecting.
@@ -524,16 +843,170 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<()> {
     // Let creates already in flight land first, or they rest AFTER the sweep (an XRP bid did,
     // 2026-09-25).
     tokio::time::sleep(Duration::from_secs(2)).await;
-    j.row("stop", json!({"reason": stop_reason, "posts": posts, "cancels": cancels, "rejects": rejects, "fills": fills, "group_trips": group_trips, "undercuts": undercuts, "local_cash_c": cash_c}));
+    j.row("stop", json!({"reason": stop_reason, "game_pauses": game_pauses, "jump_pauses": jump_pauses, "posts": posts, "cancels": cancels, "rejects": rejects, "fills": fills, "group_trips": group_trips, "undercuts": undercuts, "local_cash_c": cash_c}));
     cancel_everything(&http, &auth, &mut j, p.exchange_index).await;
-    let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await;
+    if !dry() { let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await; }
+    if let Some(t) = spot_task { t.abort(); }
+    if let Some(t) = auto_task { t.abort(); }
+    j.row("round_trips", json!({"n": round_trips, "pnl_c": rt_pnl_c}));
     let eq = equity_c(&http, &auth, p.exchange_index).await.unwrap_or(f64::NAN);
     let session = realized_c + markets.values().map(Mkt::mtm_c).sum::<f64>();
     j.row("end", json!({"venue_equity_c": eq, "session_mtm_c": session, "cumulative_c": equity0 - baseline + session}));
     eprintln!("session (own ledger, marked) {session:+.2}c, cumulative {:+.2}c", equity0 - baseline + session);
     j.finish();
     eprintln!("end equity {eq:.2}c, session {:+.2}c, cumulative {:+.2}c (open positions ride to settlement)", eq - equity0, eq - baseline);
-    Ok(())
+    Ok(stop_reason)
+}
+
+/// Cancel every order of ours in one game's markets and block posting there until `until`.
+#[allow(clippy::too_many_arguments)]
+fn pause_game(
+    game: &str, until: i64, game_pause: &mut HashMap<String, i64>, markets: &HashMap<String, Mkt>,
+    orders: &mut HashMap<String, LiveOrder>, http: &reqwest::Client, auth: &Arc<Auth>,
+    tx: &mpsc::UnboundedSender<Done>, exchange_index: i64, cancels: &mut u64,
+) {
+    game_pause.insert(game.to_owned(), until);
+    let victims: Vec<String> = orders.values()
+        .filter(|o| markets.get(&o.ticker).is_some_and(|m| m.game == game))
+        .map(|o| o.coid.clone()).collect();
+    for c in victims { request_cancel(http, auth, tx, orders, &c, exchange_index, cancels); }
+}
+
+/// Sports discovery: every open market of the quoted series (tag- and shard-filtered, capped),
+/// plus the parent books of the games admitted. Markets no longer open are dropped (their
+/// ledger value locked in, their order slots released — the venue cancels resting orders on
+/// close). Returns tickers that were newly added. A failed page keeps the current set.
+#[allow(clippy::too_many_arguments)]
+async fn refresh_sports(
+    http: &reqwest::Client, series: &[String], cfg: &SportsLive, exchange_index: i64,
+    markets: &mut HashMap<String, Mkt>, orders: &mut HashMap<String, LiveOrder>,
+    realized_c: &mut f64, j: &mut Journal,
+) -> Vec<String> {
+    let tagged = |t: &str| cfg.tags.iter().any(|g| t.contains(&format!("-{g}")));
+    let mut open: Vec<(Value, bool)> = Vec::new();
+    for (list, parent) in [(series, false), (cfg.parents.as_slice(), true)] {
+        for s in list {
+            let mut cursor = String::new();
+            loop {
+                let url = format!("{}/markets?series_ticker={s}&status=open&limit=1000&cursor={cursor}", rest_base());
+                let body: Value = match http.get(url).send().await {
+                    Ok(r) if r.status().is_success() => match r.json().await { Ok(b) => b, Err(_) => return Vec::new() },
+                    _ => { eprintln!("sports refresh {s}: failed, keeping the current set"); return Vec::new(); }
+                };
+                for m in body["markets"].as_array().into_iter().flatten() {
+                    let t = m["ticker"].as_str().unwrap_or("");
+                    if tagged(t) && m["exchange_index"].as_i64() == Some(exchange_index) { open.push((m.clone(), parent)); }
+                }
+                cursor = body["cursor"].as_str().unwrap_or("").to_owned();
+                if cursor.is_empty() { break; }
+            }
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+    }
+    apply_sports(open, cfg, markets, orders, realized_c, j, false)
+}
+
+/// Reconcile the tracked set with a fresh discovery (already filtered; auto lists come ranked).
+/// In `evict` mode a tracked market that fell out of the list is dropped when it holds no
+/// position and no order of ours, so a continuous run follows where the volume is.
+fn apply_sports(
+    open: Vec<(Value, bool)>, cfg: &SportsLive, markets: &mut HashMap<String, Mkt>,
+    orders: &mut HashMap<String, LiveOrder>, realized_c: &mut f64, j: &mut Journal, evict: bool,
+) -> Vec<String> {
+    let open_set: std::collections::HashSet<String> = open.iter().filter_map(|(m, _)| m["ticker"].as_str().map(str::to_owned)).collect();
+    let gone: Vec<String> = markets.iter()
+        .filter(|(t, m)| !open_set.contains(*t) && (!evict || (m.pos_fp == 0 && m.slots.iter().all(Option::is_none))))
+        .map(|(t, _)| t.clone()).collect();
+    for t in &gone {
+        if let Some(m) = markets.remove(t) {
+            *realized_c += m.mtm_c();
+            for c in m.slots.iter().flatten() { orders.remove(c); }
+        }
+    }
+    let mut new = Vec::new();
+    let mut quotable = markets.values().filter(|m| !m.parent).count();
+    for (m, parent) in open.iter().filter(|(_, p)| !*p) .chain(open.iter().filter(|(_, p)| *p)) {
+        let t = m["ticker"].as_str().unwrap_or("").to_owned();
+        if markets.contains_key(&t) { continue; }
+        let game = t.split('-').nth(1).unwrap_or("").to_owned();
+        if *parent {
+            if !markets.values().any(|x| !x.parent && x.game == game) { continue; }
+        } else {
+            if quotable >= cfg.max_markets { continue; }
+            quotable += 1;
+        }
+        let close = m["close_time"].as_str().and_then(rfc3339_us).map_or(i64::MAX / 4, |c| c / 1_000);
+        markets.insert(t.clone(), Mkt { close_unix_ms: close, ranges: price_ranges(m), game, parent: *parent, conservative: true, ..Default::default() });
+        new.push(t);
+    }
+    j.row("sports_markets", json!({"added": new.len(), "dropped": gone.len(), "total": markets.len(), "quotable": quotable}));
+    eprintln!("sports refresh: +{} -{} markets, {} tracked ({} quotable)", new.len(), gone.len(), markets.len(), quotable);
+    new
+}
+
+/// Rolling date tags as they appear in tickers (`26SEP27` = 2026-09-27): yesterday..tomorrow UTC.
+fn utc_tags() -> Vec<String> {
+    const MON: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    let today = unix_us() / 86_400_000_000;
+    (-1..=1).map(|d| {
+        // Civil-from-days (H. Hinnant), days since 1970-01-01.
+        let z = today + d + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("{:02}{}{:02}", year % 100, MON[(month - 1) as usize], day)
+    }).collect()
+}
+
+/// Background sweep of every open sports event: fee-free series, our shard, a date tag in
+/// the ticker, a tight enough in-band book, enough 24h volume. Ranked by 24h volume.
+async fn auto_discover(
+    http: reqwest::Client, free: std::collections::HashSet<String>, exchange_index: i64,
+    refresh_s: u64, max_spread_c: i64, min_v24: f64, tx: mpsc::Sender<Vec<Value>>,
+) {
+    let f = |m: &Value, k: &str| m[k].as_str().and_then(|x| x.parse::<f64>().ok());
+    loop {
+        let tags: Vec<String> = utc_tags().into_iter().map(|t| format!("-{t}")).collect();
+        let mut picked: Vec<(f64, Value)> = Vec::new();
+        let mut cursor = String::new();
+        let mut ok = true;
+        for _ in 0..400 {
+            let url = format!("{}/events?status=open&with_nested_markets=true&limit=200&cursor={cursor}", rest_base());
+            let body: Value = match http.get(&url).send().await {
+                Ok(r) if r.status().is_success() => match r.json().await { Ok(b) => b, Err(_) => { ok = false; break; } },
+                Ok(r) if r.status().as_u16() == 429 => { tokio::time::sleep(Duration::from_secs(2)).await; continue; }
+                _ => { ok = false; break; }
+            };
+            for ev in body["events"].as_array().into_iter().flatten() {
+                if !ev["series_ticker"].as_str().is_some_and(|s| free.contains(s)) { continue; }
+                for m in ev["markets"].as_array().into_iter().flatten() {
+                    let t = m["ticker"].as_str().unwrap_or("");
+                    if m["exchange_index"].as_i64() != Some(exchange_index) || !tags.iter().any(|g| t.contains(g.as_str())) { continue; }
+                    if m["status"].as_str().is_some_and(|s| s != "active") { continue; }
+                    let (Some(b), Some(a)) = (f(m, "yes_bid_dollars"), f(m, "yes_ask_dollars")) else { continue };
+                    let v = f(m, "volume_24h_fp").unwrap_or(0.0);
+                    let mid = (a + b) * 50.0;
+                    if b <= 0.0 || a >= 1.0 || (a - b) * 100.0 > max_spread_c as f64 + 0.01 || !(5.0..=95.0).contains(&mid) || v < min_v24 { continue; }
+                    picked.push((v, m.clone()));
+                }
+            }
+            cursor = body["cursor"].as_str().unwrap_or("").to_owned();
+            if cursor.is_empty() { break; }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        if ok {
+            picked.sort_by(|a, b| b.0.total_cmp(&a.0));
+            if tx.send(picked.into_iter().map(|(_, m)| m).collect()).await.is_err() { return; }
+        } else {
+            eprintln!("auto discovery: sweep failed, keeping the current set");
+        }
+        tokio::time::sleep(Duration::from_secs(refresh_s)).await;
+    }
 }
 
 fn release(orders: &mut HashMap<String, LiveOrder>, markets: &mut HashMap<String, Mkt>, coid: &str) {
@@ -563,7 +1036,7 @@ fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSe
     let (http, auth, tx) = (http.clone(), auth.clone(), tx.clone());
     tokio::spawn(async move {
         let path = format!("/portfolio/events/orders/{id}?market_ticker={ticker}&exchange_index={exchange_index}");
-        let res = signed(&http, &auth, "DELETE", &path, None).await;
+        let res = if dry() { Ok(json!({})) } else { signed(&http, &auth, "DELETE", &path, None).await };
         let _ = tx.send(Done::Cancelled { coid, res });
     });
 }
@@ -580,15 +1053,22 @@ pub async fn cancel_all(auth: Auth, exchange_index: i64) -> Result<()> {
 }
 
 async fn cancel_everything(http: &reqwest::Client, auth: &Auth, j: &mut Journal, exchange_index: i64) {
-    for attempt in 0..3 {
+    if dry() { eprintln!("dry run: nothing to cancel"); return; }
+    // Five lists, four cancel rounds: the last list only verifies. Back off between attempts —
+    // three sweeps 10 ms apart on 2026-09-25 retried inside the same failure and left 2 resting.
+    for attempt in 0..5u64 {
+        if attempt > 0 { tokio::time::sleep(Duration::from_millis(250 * attempt)).await; }
         let open = match signed(http, auth, "GET", "/portfolio/orders?status=resting", None).await {
             Ok(v) => v,
             Err(e) => { eprintln!("list resting failed: {e:#}"); continue; }
         };
+        // Only this shard's orders: a second engine on another shard must survive our shutdown.
         let list: Vec<(String, String)> = open["orders"].as_array().into_iter().flatten()
+            .filter(|o| o["exchange_index"].as_i64().is_none_or(|x| x == exchange_index))
             .filter_map(|o| Some((o["order_id"].as_str()?.to_owned(), o["ticker"].as_str()?.to_owned()))).collect();
         j.row("sweep", json!({"attempt": attempt, "resting": list.len()}));
         if list.is_empty() { eprintln!("verified: no resting orders"); return; }
+        if attempt == 4 { break; }
         let body = json!({"orders": list.iter().map(|(id, t)| json!({"order_id": id, "market_ticker": t, "exchange_index": exchange_index})).collect::<Vec<_>>()});
         // The batch call can return 200 while cancelling nothing (per-order errors ride inside the
         // body — seen 2026-09-25), so log its body and ALWAYS follow with single cancels.
@@ -600,10 +1080,11 @@ async fn cancel_everything(http: &reqwest::Client, auth: &Auth, j: &mut Journal,
             let path = format!("/portfolio/events/orders/{id}?market_ticker={t}&exchange_index={exchange_index}");
             if let Err(e) = signed(http, auth, "DELETE", &path, None).await {
                 eprintln!("cancel {id} on {t} failed: {e:#}");
+                j.row("cancel_failed", json!({"order_id": id, "ticker": t, "error": format!("{e:#}")}));
             }
         }
     }
-    eprintln!("WARNING: could not verify an empty book after 3 sweeps — check the account");
+    eprintln!("WARNING: could not verify an empty book after 4 cancel rounds — check the account");
 }
 
 /// Venue equity in cents: cash on the trading shard + NET exposure of open positions. It
@@ -635,6 +1116,20 @@ async fn sync_positions(http: &reqwest::Client, auth: &Auth, markets: &mut HashM
     Ok(())
 }
 
+fn price_ranges(m: &Value) -> Vec<(i64, i64, i64)> {
+    m["price_ranges"].as_array().into_iter().flatten().filter_map(|r| {
+        let f = |k: &str| parse_value(r.get(k), PRICE_SCALE).ok();
+        Some((f("start")?, f("end")?, f("step")?))
+    }).collect()
+}
+
+/// Price step at `px` on this grid; 1c if the grid is unknown (coarser never invents a price).
+fn tick_at(ranges: &[(i64, i64, i64)], px: i64) -> i64 {
+    ranges.iter().find(|(a, b, _)| *a <= px && px < *b)
+        .or_else(|| ranges.last().filter(|(_, b, _)| px == *b))
+        .map_or(100, |(_, _, st)| *st)
+}
+
 async fn refresh_markets(http: &reqwest::Client, series: &[String], markets: &mut HashMap<String, Mkt>) {
     let now_ms = unix_us() / 1_000;
     for s in series {
@@ -644,7 +1139,7 @@ async fn refresh_markets(http: &reqwest::Client, series: &[String], markets: &mu
         for m in body["markets"].as_array().into_iter().flatten() {
             let (Some(t), Some(c)) = (m["ticker"].as_str(), m["close_time"].as_str().and_then(rfc3339_us)) else { continue };
             if c / 1_000 > now_ms && !markets.contains_key(t) {
-                markets.insert(t.to_owned(), Mkt { close_unix_ms: c / 1_000, ..Default::default() });
+                markets.insert(t.to_owned(), Mkt { close_unix_ms: c / 1_000, ranges: price_ranges(m), ..Default::default() });
             }
         }
     }
@@ -673,6 +1168,23 @@ pub async fn signed(http: &reqwest::Client, auth: &Auth, method: &str, path: &st
 #[cfg(test)]
 mod tests {
     use super::Mkt;
+    use serde_json::Value;
+
+    #[test]
+    fn tick_follows_the_venue_grid() {
+        let v: Value = serde_json::from_str(r#"{"price_ranges":[{"end":"0.1000","start":"0.0000","step":"0.0010"},{"end":"0.9000","start":"0.1000","step":"0.0100"},{"end":"1.0000","start":"0.9000","step":"0.0010"}]}"#).unwrap();
+        let r = super::price_ranges(&v);
+        assert_eq!((super::tick_at(&r, 500), super::tick_at(&r, 5_000), super::tick_at(&r, 9_500)), (10, 100, 10));
+        let flat: Value = serde_json::from_str(r#"{"price_ranges":[{"end":"1.0000","start":"0.0000","step":"0.0100"}]}"#).unwrap();
+        assert_eq!(super::tick_at(&super::price_ranges(&flat), 500), 100); // COPPER wing: 1c
+        assert_eq!(super::tick_at(&[], 500), 100); // unknown grid: never finer than 1c
+        // Boundaries: an ask at 0.9000 improves by 1c (to 0.8900), a bid at 0.9000 by 0.1c.
+        assert_eq!(super::tick_at(&r, 9_000 - 1), 100);
+        assert_eq!(super::tick_at(&r, 9_000), 10);
+        // An ask at 0.1000 improves by 0.1c (to 0.0990), a bid at 0.0990 by 0.1c (to 0.1000).
+        assert_eq!(super::tick_at(&r, 1_000 - 1), 10);
+        assert_eq!(super::tick_at(&r, 990), 10);
+    }
 
     #[test]
     fn a_pair_is_worth_one_dollar_at_any_mid() {

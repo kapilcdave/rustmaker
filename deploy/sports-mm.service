@@ -1,0 +1,20 @@
+[Unit]
+Description=rustmaker sports market maker (shard 0, auto discovery, REAL orders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=admin
+WorkingDirectory=/home/admin/trading/kalshi-mm15
+ExecStart=/home/admin/trading/kalshi-mm15/kalshi-mm15-sports sports-live --armed --series auto --exchange-index 0 --min-spread-c 1 --max-open-spread-c 3 --max-markets 150 --max-loss-c 200 --cum-max-loss-c 400 --minutes 1440 --out data/sports-auto --env-file .env
+StandardOutput=append:/home/admin/trading/kalshi-mm15/data/sports-auto/run.log
+StandardError=append:/home/admin/trading/kalshi-mm15/data/sports-auto/run.log
+# Crash or the 24 h deadline: restart. A loss-cap stop exits 3 and stays stopped.
+Restart=always
+RestartSec=30
+RestartPreventExitStatus=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

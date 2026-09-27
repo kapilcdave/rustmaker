@@ -48,6 +48,15 @@ pub struct Params {
     pub series: Vec<String>,
     /// Run only the frozen `base` rule, so it gets the whole write budget (PREREG_btc_focus.md).
     pub only_base: bool,
+    /// Run the controlled penny4 clip-capacity experiment: touch control plus 1, 3 and 10
+    /// contract clips, each with an absolute-position cap equal to its clip.
+    pub clip_ladder: bool,
+    /// Spot gate lookback: the Coinbase mid's move over this window decides a spot pull.
+    pub spot_window_us: i64,
+    /// Sports joins the touch at an absolute cent spread, without crypto gates.
+    pub sports_min_spread_c: Option<i64>,
+    /// Sports: admit only tickers containing `-<tag>` (e.g. a game date like 26SEP26).
+    pub sports_tag: Option<String>,
 }
 
 impl Default for Params {
@@ -67,6 +76,10 @@ impl Default for Params {
             bucket: 900.0,
             series: Vec::new(),
             only_base: false,
+            clip_ladder: false,
+            spot_window_us: 1_000_000,
+            sports_min_spread_c: None,
+            sports_tag: None,
         }
     }
 }
@@ -115,6 +128,13 @@ struct Strategy {
     /// 0 = join the touch (mid band only). n > 0 = PENNY: quote one tick inside, on any price band,
     /// only when the spread is at least n ticks (PREREG_penny.md).
     penny_room: i64,
+    /// Spot gate: pull the side a Coinbase move of more than this many bps (over
+    /// `spot_window_us`) runs into, both on the spot tick itself and at every later decision.
+    /// 0 = off. The Kalshi mid lags spot (the fast makers react to spot, 2026-09-23 side analysis).
+    spot_bps: f64,
+    spot_pulls: u64,
+    clip_fp: i64,
+    max_pos_fp: i64,
     seats: HashMap<String, Seat>,
     tokens: f64,
     last_refill_us: i64,
@@ -164,21 +184,70 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
     });
 
     let now0 = unix_us();
-    let mut strategies: Vec<Strategy> = [
-        ("base", true, false, true, 0u8, 0i64),
-        ("penny5", true, false, true, 0, 5),
-        ("penny2", true, false, true, 0, 2),
-    ]
+    let specs: Vec<(&'static str, bool, bool, bool, u8, i64, f64, i64)> = if p.clip_ladder {
+        vec![
+            ("touch_c1", true, false, true, 0, 0, 0.0, 1),
+            ("p4_c1", true, false, true, 0, 4, 0.0, 1),
+            ("p4_c3", true, false, true, 0, 4, 0.0, 3),
+            ("p4_c10", true, false, true, 0, 4, 0.0, 10),
+        ]
+    } else {
+        vec![
+            ("base", true, false, true, 0, 0, 0.0, 1),
+            ("penny3", true, false, true, 0, 3, 0.0, 1),
+            // penny4 is the live rule (run 9, 2026-09-26). Its spot-gated and amend variants:
+            ("penny4", true, false, true, 0, 4, 0.0, 1),
+            ("p4_am", true, true, true, 0, 4, 0.0, 1),
+            ("p4_s1", true, false, true, 0, 4, 1.0, 1),
+            ("p4_s2", true, false, true, 0, 4, 2.0, 1),
+            ("p4_s4", true, false, true, 0, 4, 4.0, 1),
+            ("p4_am_s2", true, true, true, 0, 4, 2.0, 1),
+        ]
+    };
+    let mut strategies: Vec<Strategy> = specs
         .into_iter()
-        .map(|(name, gate, amend, prorata, pair, penny_room)| Strategy {
-            name, gate, amend, prorata, pair, penny_room, amends: 0, seats: HashMap::new(), tokens: p.bucket, last_refill_us: now0,
-            posts: 0, cancels: 0, throttled: 0, pulls: 0, fills: 0, filled_fp: 0,
+        .map(|(name, gate, amend, prorata, pair, penny_room, spot_bps, clip_multiple)| {
+            let clip_fp = p.size_fp * clip_multiple;
+            Strategy {
+                name, gate, amend, prorata, pair, penny_room, spot_bps, spot_pulls: 0,
+                clip_fp, max_pos_fp: if p.clip_ladder { clip_fp } else { p.max_pos_fp },
+                amends: 0, seats: HashMap::new(), tokens: p.bucket, last_refill_us: now0,
+                posts: 0, cancels: 0, throttled: 0, pulls: 0, fills: 0, filled_fp: 0,
+            }
         })
         .filter(|s: &Strategy| !p.only_base || s.name == "base")
         .collect();
 
+    if p.sports_min_spread_c.is_some() {
+        strategies.retain(|s| s.name == "base");
+        for s in &mut strategies {
+            s.name = "sports_join";
+            s.gate = false;
+            // Do not assume cancellations ahead of us. Trades and level clamps only.
+            s.prorata = false;
+        }
+        fs::write(out.join(format!("sports_run_{stamp}.json")), serde_json::to_vec_pretty(&serde_json::json!({
+            "mode":"shadow", "strategy":"sports_join", "series":p.series,
+            "min_spread_c":p.sports_min_spread_c, "tag":p.sports_tag, "create_us":p.create_us,
+            "cancel_us":p.cancel_us, "size_fp":p.size_fp, "max_pos_fp":p.max_pos_fp,
+            "stop_before_close_s":p.stop_before_close_s,
+            "fees_included":false, "game_state_feed":false,
+            "note":"Research only. Cash and fills are simulated and gross of fees. Close time is not game start."
+        }))?)?;
+    }
+
     let (disc_tx, mut disc_rx) = mpsc::channel(256);
-    let disc = tokio::spawn(discover(disc_tx, p.series.clone()));
+    let disc = if p.sports_min_spread_c.is_some() {
+        tokio::spawn(crate::sports::discover(disc_tx, p.series.clone(), out.clone(), p.sports_tag.clone()))
+    } else {
+        tokio::spawn(discover(disc_tx, p.series.clone()))
+    };
+    let (spot_tx, mut spot_rx) = mpsc::channel::<SpotTick>(65_536);
+    let spot_feed = if p.sports_min_spread_c.is_none() {
+        Some(tokio::spawn(spot_feed(spot_tx, p.series.clone())))
+    } else { None };
+    // Per series: (our receipt µs, Coinbase mid in dollars), trimmed to the last 10 s.
+    let mut spot: HashMap<String, VecDeque<(i64, f64)>> = HashMap::new();
     let started = Instant::now();
     let deadline = started + Duration::from_secs(minutes * 60);
     let mut markets: HashMap<String, Mkt> = HashMap::new();
@@ -225,6 +294,34 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                     next_id += 1;
                     continue;
                 }
+                sp = spot_rx.recv(), if spot_feed.is_some() => {
+                    let Some(sp) = sp else { continue };
+                    let _ = tape_tx.try_send(format!("X,{},{},{:.6},,,,{}\n", sp.recv_us, sp.series, sp.mid, sp.exch_ms));
+                    let h = spot.entry(sp.series.clone()).or_default();
+                    h.push_back((sp.recv_us, sp.mid));
+                    while h.front().is_some_and(|(t, _)| *t < sp.recv_us - 10_000_000) { h.pop_front(); }
+                    let Some(r) = spot_ret_bps(h, sp.recv_us, p.spot_window_us) else { continue };
+                    // Act on the spot tick itself: cancel the side the move runs into, now, not at
+                    // the next Kalshi message (which is what lags).
+                    let side = if r > 0.0 { ASK } else { BID };
+                    let prefix = format!("{}-", sp.series);
+                    for s in &mut strategies {
+                        if s.spot_bps <= 0.0 || r.abs() <= s.spot_bps { continue; }
+                        s.tokens = (s.tokens + (sp.recv_us - s.last_refill_us) as f64 / 1e6 * p.tokens_per_s).min(p.bucket);
+                        s.last_refill_us = sp.recv_us;
+                        for (t, seat) in s.seats.iter_mut() {
+                            if !t.starts_with(&prefix) { continue; }
+                            let Some(o) = seat.orders[side].as_mut() else { continue };
+                            if o.cancel_at.is_some() { continue; }
+                            if s.tokens < 2.0 { s.throttled += 1; continue; }
+                            s.tokens -= 2.0;
+                            s.cancels += 1;
+                            s.spot_pulls += 1;
+                            o.cancel_at = Some(sp.recv_us + p.cancel_us);
+                        }
+                    }
+                    continue;
+                }
                 _ = close_tick.tick() => {
                     let now_ms = unix_us() / 1_000;
                     let closed: Vec<String> = markets.iter()
@@ -249,8 +346,9 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                     handle_us.clear();
                     for s in &strategies {
                         let pos: i64 = s.seats.values().map(|x| x.pos_fp.abs()).sum();
-                        eprintln!("[{}s] {:10} posts={} amends={} cancels={} pulls={} throttled={} fills={} filled_ct={:.0} open_abs_pos_ct={:.0}",
-                            started.elapsed().as_secs(), s.name, s.posts, s.amends, s.cancels, s.pulls, s.throttled,
+                        eprintln!("[{}s] {:10} clip={:.0} posts={} amends={} cancels={} pulls={} spot_pulls={} throttled={} fills={} filled_ct={:.0} open_abs_pos_ct={:.0}",
+                            started.elapsed().as_secs(), s.name, s.clip_fp as f64 / SIZE_SCALE as f64,
+                            s.posts, s.amends, s.cancels, s.pulls, s.spot_pulls, s.throttled,
                             s.fills, s.filled_fp as f64 / SIZE_SCALE as f64, pos as f64 / SIZE_SCALE as f64);
                     }
                     continue;
@@ -321,6 +419,7 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
             // 2. Apply the event.
             match kind {
                 "orderbook_delta" => {
+                    let previous_touch = book.touch();
                     if let Err(e) = book.apply_delta(m) {
                         eprintln!("delta {ticker}: {e:#}; reconnecting");
                         break;
@@ -357,6 +456,11 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                         let mid = (b + a) as f64 / 200.0;
                         if mk.mids.back().is_none_or(|(_, x)| *x != mid) {
                             mk.mids.push_back((vt, mid));
+                        }
+                        // Size changes and symmetric price changes matter to queue research
+                        // even when the midpoint is unchanged. Keep midpoint history sparse,
+                        // but record every change to the best prices or displayed sizes.
+                        if t != previous_touch {
                             tape_dropped += tape_tx.try_send(format!(
                                 "B,{now},{ticker},{b},{},{a},{},{vt}\n",
                                 t.yes_bid_size_fp.unwrap_or(0), t.yes_ask_size_fp.unwrap_or(0))).is_err() as u64;
@@ -380,10 +484,11 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                         if !o.live {
                             continue;
                         }
-                        // A taker walking THROUGH our price must have taken our level entirely.
+                        // A taker walking through our price can consume at most its observed size.
+                        // This distinction is immaterial for most 1-ct quotes but critical at c10.
                         let through = if taker_yes { price > o.price } else { price < o.price };
                         let fill = if through {
-                            o.remaining
+                            through_fill(o.remaining, count)
                         } else if price == o.price {
                             // Undo the clamp of this trade's own fill delta(s), if they came first.
                             let ms = vt / 1_000;
@@ -451,6 +556,8 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
             let in_band = mid >= p.mid_lo_c && mid <= p.mid_hi_c;
             let open_long = mk.close_unix_ms == 0
                 || (mk.close_unix_ms - now / 1_000) > p.stop_before_close_s * 1_000;
+            let series = ticker.split('-').next().unwrap_or("");
+            let spot_r = spot.get(series).and_then(|h| spot_ret_bps(h, now, p.spot_window_us));
             for s in &mut strategies {
                 // Token bucket refill.
                 s.tokens = (s.tokens + (now - s.last_refill_us) as f64 / 1e6 * p.tokens_per_s).min(p.bucket);
@@ -467,12 +574,15 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                     } else {
                         in_band && open_long
                     };
+                    if let Some(width) = p.sports_min_spread_c {
+                        want = crate::sports::quote_allowed(bid, ask, width, mk.close_unix_ms, now / 1000, p.stop_before_close_s);
+                    }
                     if pair_mode > 0 {
                         // Keep trying to flatten until 20 s before close, in or out of band.
                         want = mk.close_unix_ms == 0 || mk.close_unix_ms - now / 1_000 > 20_000;
                     }
-                    if i == BID && seat.pos_fp + SIZE_SCALE > p.max_pos_fp && !pairing { want = false; }
-                    if i == ASK && seat.pos_fp - SIZE_SCALE < -p.max_pos_fp && !pairing { want = false; }
+                    if i == BID && seat.pos_fp + s.clip_fp > s.max_pos_fp && !pairing { want = false; }
+                    if i == ASK && seat.pos_fp - s.clip_fp < -s.max_pos_fp && !pairing { want = false; }
                     if want && s.gate && pair_mode == 0 {
                         // Pull the side a toxic taker would hit: mid running into it, or it is
                         // nearly empty (about to be cleared).
@@ -486,6 +596,12 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                             if seat.orders[i].as_ref().is_some_and(|o| o.cancel_at.is_none()) {
                                 s.pulls += 1;
                             }
+                        }
+                    }
+                    // Spot up = YES worth more: our ask is the stale side. Spot down: our bid.
+                    if want && s.spot_bps > 0.0 && pair_mode == 0 {
+                        if let Some(r) = spot_r {
+                            if (i == ASK && r > s.spot_bps) || (i == BID && r < -s.spot_bps) { want = false; }
                         }
                     }
                     let mut target = if i == BID { bid } else { ask };
@@ -541,7 +657,7 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
                                 price: target, live_at: now + p.create_us, cancel_at: None,
                                 live: false, queue_ahead: 0,
                                 // A pairing order only ever closes what is open (fractional fills).
-                                remaining: if pairing { p.size_fp.min(seat.pos_fp.abs()) } else { p.size_fp },
+                                remaining: if pairing { s.clip_fp.min(seat.pos_fp.abs()) } else { s.clip_fp },
                                 shrinks: VecDeque::new(), amend: None,
                             });
                         } else {
@@ -560,7 +676,87 @@ pub async fn run(auth: Auth, out: PathBuf, minutes: u64, p: Params) -> Result<()
         }
     }
     disc.abort();
+    if let Some(feed) = spot_feed { feed.abort(); }
     drop(tape_tx);
     tape_thread.join().map_err(|_| anyhow::anyhow!("tape thread panicked"))??;
     Ok(())
+}
+
+pub struct SpotTick {
+    pub series: String,
+    pub recv_us: i64,
+    pub mid: f64,
+    pub exch_ms: i64,
+}
+
+/// Coinbase mid move, in bps, from `window_us` ago to now. None when the feed is stale (no tick
+/// in the last 3 s) or has no history that far back: a dead feed must never gate or un-gate.
+pub fn spot_ret_bps(h: &VecDeque<(i64, f64)>, now: i64, window_us: i64) -> Option<f64> {
+    let &(t_last, last) = h.back()?;
+    if now - t_last > 3_000_000 { return None; }
+    let &(_, then) = h.iter().rev().find(|(t, _)| *t <= now - window_us)?;
+    Some((last / then - 1.0) * 1e4)
+}
+
+fn through_fill(remaining: i64, observed_count: i64) -> i64 {
+    remaining.min(observed_count.max(0))
+}
+
+/// Coinbase Exchange public `ticker` feed (no auth; market data only, no trading): one message
+/// per match with the best bid/ask after it. KXBTC15M → BTC-USD.
+pub async fn spot_feed(tx: mpsc::Sender<SpotTick>, series: Vec<String>) -> Result<()> {
+    let product = |s: &str| format!("{}-USD", s.trim_start_matches("KX").trim_end_matches("15M"));
+    let by_product: HashMap<String, String> = series.iter().map(|s| (product(s), s.clone())).collect();
+    loop {
+        let (mut ws, _) = match connect_async("wss://ws-feed.exchange.coinbase.com").await {
+            Ok(x) => x,
+            Err(e) => { eprintln!("spot ws connect: {e}"); tokio::time::sleep(Duration::from_secs(1)).await; continue; }
+        };
+        let sub = serde_json::json!({"type": "subscribe", "product_ids": by_product.keys().collect::<Vec<_>>(), "channels": ["ticker"]});
+        if ws.send(Message::Text(sub.to_string().into())).await.is_err() { continue; }
+        while let Some(msg) = ws.next().await {
+            let text = match msg {
+                Ok(Message::Text(t)) => t,
+                Ok(Message::Ping(x)) => { let _ = ws.send(Message::Pong(x)).await; continue; }
+                Ok(_) => continue,
+                Err(e) => { eprintln!("spot ws error: {e}"); break; }
+            };
+            let recv_us = unix_us();
+            let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+            if v["type"] == "error" { eprintln!("spot feed error: {v}"); continue; }
+            if v["type"] != "ticker" { continue; }
+            let Some(series) = v["product_id"].as_str().and_then(|p| by_product.get(p)) else { continue };
+            let px = |k: &str| v[k].as_str().and_then(|x| x.parse::<f64>().ok());
+            let (Some(b), Some(a)) = (px("best_bid"), px("best_ask")) else { continue };
+            let exch_ms = v["time"].as_str().and_then(rfc3339_us).map_or(0, |u| u / 1_000);
+            if tx.try_send(SpotTick { series: series.clone(), recv_us, mid: (a + b) / 2.0, exch_ms }).is_err() {
+                // The main loop is behind; a dropped spot tick only delays a pull.
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    #[test]
+    fn spot_return_needs_fresh_history() {
+        let h: VecDeque<(i64, f64)> = [(0, 100.0), (500_000, 100.01), (1_200_000, 100.03)].into();
+        // 1 s back from 1.2 s is the tick at 0: +3 bps.
+        let r = super::spot_ret_bps(&h, 1_200_000, 1_000_000).unwrap();
+        assert!((r - 3.0).abs() < 1e-9, "{r}");
+        // Not enough history for a 2 s window.
+        assert!(super::spot_ret_bps(&h, 1_200_000, 2_000_000).is_none());
+        // Feed silent for more than 3 s: no gate either way.
+        assert!(super::spot_ret_bps(&h, 5_000_000, 1_000_000).is_none());
+    }
+
+    #[test]
+    fn through_price_fill_is_bounded_by_observed_taker_size() {
+        assert_eq!(super::through_fill(1_000, 250), 250);
+        assert_eq!(super::through_fill(1_000, 2_000), 1_000);
+        assert_eq!(super::through_fill(1_000, -1), 0);
+    }
 }
