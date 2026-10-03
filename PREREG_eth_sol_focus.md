@@ -101,3 +101,17 @@ thin flow, and ETH/SOL are not materially deeper for a 1-ct seat.
 
 One scored window per series per rule. A failed bound closes that series for this rule; a different
 rule is a new PREREG, not a re-score of these markets.
+
+## Amendment 1, 2026-10-03, written BEFORE the window opened: the series run SEQUENTIALLY, solo
+
+`PREREG_btc_focus.md` ran **one series alone**, and gave as a reason that "at 9 series the Advanced
+write budget throttled the gated quoter ~34k times in 3 h. One series spends the whole 300 tokens/s
+on the deepest book." The shadow models that budget and reports a `throttled` count, so three series
+sharing one window would hand the primary a different (worse) write budget than the BTC window it is
+being compared against.
+
+Therefore: **three sequential solo windows, `--series` with exactly one value, ETH first.**
+`KXETH15M` is the primary and is scored first and alone. `KXSOL15M` and `KXNEAR15M` follow in their
+own windows only if the operator still wants them after ETH is read out. This is a change to
+scheduling, not to the rule, the metric or the decision bound, and it is recorded before any
+ETH-only datum exists.
