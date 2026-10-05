@@ -30,6 +30,9 @@ TARGET_H="${TARGET_H:-14}"          # 48 markets at ~4/h is 12 h; 14 h gives sla
 SEG_MIN="${SEG_MIN:-60}"
 MIN_FREE_MB="${MIN_FREE_MB:-400}"
 BIN="${BIN:-./kalshi-mm15}"
+# load_auth() reads the PROCESS ENVIRONMENT unless handed --env-file, and a detached job inherits
+# neither; without this the binary dies instantly with "set KALSHI_API_KEY_ID" every segment.
+ENV_FILE="${ENV_FILE:-.env}"
 STOP="$OUT/STOP"
 
 mkdir -p "$OUT"
@@ -37,8 +40,17 @@ log() { echo "$(date -u +%FT%TZ) $*"; }
 free_mb() { df -Pm . | awk 'NR==2{print $4}'; }
 
 [ -x "$BIN" ] || { log "FATAL: no executable $BIN"; exit 1; }
-# Refuse to start if the binary can reach an armed path without the flag being ours to pass.
-if "$BIN" 2>&1 | grep -q 'shadow'; then :; else log "FATAL: $BIN has no shadow subcommand"; exit 1; fi
+[ -f "$ENV_FILE" ] || { log "FATAL: no credential file $ENV_FILE"; exit 1; }
+# Confirm the binary really has the read-only `shadow` subcommand before relying on it.
+# NOTE: capture the usage text first. Under `set -o pipefail` a pipeline takes the BINARY's
+# non-zero exit (it bails with a usage error when given no subcommand), so
+# `"$BIN" | grep -q shadow` reports failure even when grep matched -- which rejected a
+# perfectly good binary on the first launch attempt.
+usage="$("$BIN" 2>&1 || true)"
+case "$usage" in
+    *shadow*) : ;;
+    *) log "FATAL: $BIN has no shadow subcommand; usage was: ${usage%%$'\n'*}"; exit 1 ;;
+esac
 
 log "series=$SERIES out=$OUT target=${TARGET_H}h segment=${SEG_MIN}m free=$(free_mb)MB"
 log "PREREG_eth_sol_focus.md -- rule frozen, --only-base, read-only"
@@ -53,7 +65,7 @@ while [ "$(date -u +%s)" -lt "$deadline" ]; do
     n=$((n+1)); t0=$(date -u +%s)
     log "segment $n start (free ${fm}MB)"
     "$BIN" shadow --out "$OUT" --minutes "$SEG_MIN" --series "$SERIES" --only-base \
-        --stop-before-close-s 120 >> "$OUT/shadow.log" 2>&1
+        --stop-before-close-s 120 --env-file "$ENV_FILE" >> "$OUT/shadow.log" 2>&1
     rc=$?; dt=$(( $(date -u +%s) - t0 ))
     log "segment $n exit rc=$rc after ${dt}s"
 
