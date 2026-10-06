@@ -1,0 +1,33 @@
+{
+  "preregistration": "PREREG_pm_us_crossvenue_hedged_maker_20261006.md",
+  "cutoff_ts": 1791302289.195273,
+  "raw_rows": 2695,
+  "fresh_paired_rows": 443,
+  "persistent_candidate_windows": 1,
+  "mean_margin_c": 2.0000000000000036,
+  "halves_c": [
+    null,
+    2.0000000000000036
+  ],
+  "next_sample_known": 0,
+  "next_sample_survival": null,
+  "minimum_hedge_size": 2862.8,
+  "signals": [
+    {
+      "direction": "make_pm_yes_hedge_k_no",
+      "maker_price": 0.49,
+      "hedge_price": 0.47,
+      "hedge_fee": 0.02,
+      "hedge_size": 2862.8,
+      "margin": 0.020000000000000035,
+      "slug": "cpc-btc-updown-15m-2026-09-28-0245z",
+      "ticker": "KXBTC15M-26SEP272300-00",
+      "ts": 1790563537.37715,
+      "margin_c": 2.0000000000000036,
+      "previous_margin_c": 3.0000000000000044,
+      "next_sample_margin_c": null,
+      "next_sample_survives": false
+    }
+  ],
+  "passes_short_screen": false
+}

@@ -1,0 +1,68 @@
+{
+  "preregistration": "PREREG_crypto_leader_complete_set_20261006.md",
+  "evidence": "historical same-minute candle closes; non-atomic",
+  "events": 176,
+  "invalid_events": 0,
+  "observations": 2034,
+  "best": {
+    "all_yes": {
+      "event": "KXCRYPTOLEAD15M-26SEP161415",
+      "ts": 1789581720,
+      "name": "all_yes",
+      "margin": 0.1499999999999999,
+      "margin_after_1c_per_leg": 0.09999999999999991
+    },
+    "all_no": {
+      "event": "KXCRYPTOLEAD15M-26OCT011800",
+      "ts": 1790891880,
+      "name": "all_no",
+      "margin": -0.019999999999999574,
+      "margin_after_1c_per_leg": -0.06999999999999958
+    },
+    "four_no_omit_BTC": {
+      "event": "KXCRYPTOLEAD15M-26OCT011800",
+      "ts": 1790891880,
+      "name": "four_no_omit_BTC",
+      "margin": -0.020000000000000018,
+      "margin_after_1c_per_leg": -0.06000000000000002
+    },
+    "four_no_omit_ETH": {
+      "event": "KXCRYPTOLEAD15M-26OCT011800",
+      "ts": 1790891880,
+      "name": "four_no_omit_ETH",
+      "margin": -0.020000000000000018,
+      "margin_after_1c_per_leg": -0.06000000000000002
+    },
+    "four_no_omit_SOL": {
+      "event": "KXCRYPTOLEAD15M-26OCT021630",
+      "ts": 1790973000,
+      "name": "four_no_omit_SOL",
+      "margin": -0.020000000000000018,
+      "margin_after_1c_per_leg": -0.06000000000000002
+    },
+    "four_no_omit_XRP": {
+      "event": "KXCRYPTOLEAD15M-26OCT022245",
+      "ts": 1790995500,
+      "name": "four_no_omit_XRP",
+      "margin": -0.020000000000000018,
+      "margin_after_1c_per_leg": -0.06000000000000002
+    },
+    "four_no_omit_HYPE": {
+      "event": "KXCRYPTOLEAD15M-26OCT011800",
+      "ts": 1790891880,
+      "name": "four_no_omit_HYPE",
+      "margin": -0.020000000000000018,
+      "margin_after_1c_per_leg": -0.06000000000000002
+    }
+  },
+  "opportunities": 1,
+  "stressed_opportunities": 1,
+  "opportunity_events": 1,
+  "margin_c_quantiles": {
+    "0.0": 14.999999999999991,
+    "0.25": 14.999999999999991,
+    "0.5": 14.999999999999991,
+    "0.75": 14.999999999999991,
+    "1.0": 14.999999999999991
+  }
+}

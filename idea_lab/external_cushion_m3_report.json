@@ -1,0 +1,53 @@
+{
+  "source_commit": "a3f1ebaad385dec9a0595ad558649fa199a20256",
+  "classification": "external-source transfer; overlapping history; non-promotional",
+  "alignment": "minute-3 Kalshi close, Coinbase completed bar ending one minute earlier",
+  "all_local_period": {
+    "trades": 183,
+    "days": 22,
+    "mean_c": 3.337704918032787,
+    "clustered_se_c": 1.836634260625183,
+    "clustered_lo95_c": -0.2620982327925715,
+    "extra_1c_stress_lo95_c": -1.2620982327925718,
+    "halves_c": [
+      4.876923076923077,
+      1.815217391304348
+    ],
+    "best_10pct_days_deleted_mean_c": 1.2294871794871791,
+    "one_minute_delayed_mean_c": 3.2918032786885245,
+    "by_side": {
+      "yes": {
+        "trades": 93,
+        "mean_c": 4.570967741935484
+      },
+      "no": {
+        "trades": 90,
+        "mean_c": 2.0633333333333317
+      }
+    }
+  },
+  "strictly_after_source_report": {
+    "trades": 14,
+    "days": 2,
+    "mean_c": -1.6428571428571452,
+    "clustered_se_c": 7.446267328413439,
+    "clustered_lo95_c": -16.237541106547486,
+    "extra_1c_stress_lo95_c": -17.23754110654749,
+    "halves_c": [
+      -15.742857142857144,
+      12.457142857142856
+    ],
+    "best_10pct_days_deleted_mean_c": -38.5,
+    "one_minute_delayed_mean_c": -2.2214285714285724,
+    "by_side": {
+      "yes": {
+        "trades": 5,
+        "mean_c": -9.960000000000003
+      },
+      "no": {
+        "trades": 9,
+        "mean_c": 2.977777777777778
+      }
+    }
+  }
+}

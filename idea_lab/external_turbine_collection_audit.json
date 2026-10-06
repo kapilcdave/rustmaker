@@ -1,0 +1,378 @@
+{
+  "source_commit": "a6b31da83462698fc3a6a6ccbe253de6dad1f5b7",
+  "source_generated_at": "2026-05-21T17:47:41Z",
+  "all_strategy_files": 1391,
+  "kxbtc15m_backtests": 1276,
+  "positive_net_pnl": 245,
+  "positive_share": 0.1920062695924765,
+  "roi_over_100pct": 191,
+  "exact_unique_dsls": 1225,
+  "exact_duplicate_dsl_groups": 35,
+  "largest_exact_duplicate_group": 13,
+  "unique_strategy_names": 1253,
+  "largest_name_family": 9,
+  "largest_name_families": [
+    [
+      "BTC Velocity Martingale",
+      9
+    ],
+    [
+      "BTC Mean Reversion",
+      6
+    ],
+    [
+      "BTC Sniper 40",
+      4
+    ],
+    [
+      "BTC Martingale 40-80",
+      3
+    ],
+    [
+      "BTC 15m Cheap-YES Mean Reversion",
+      2
+    ],
+    [
+      "BTC 15m EMA Crossover (Coinbase Edge)",
+      2
+    ],
+    [
+      "BTC 15m Spread Capture",
+      2
+    ],
+    [
+      "BTC Opening Momentum",
+      2
+    ],
+    [
+      "BTC Reversion Scaled",
+      2
+    ],
+    [
+      "15min Tester May 14",
+      1
+    ],
+    [
+      "BTC 15m Fade",
+      1
+    ],
+    [
+      "BTC 15M Reversion",
+      1
+    ],
+    [
+      "BTC Scalp Extremes",
+      1
+    ],
+    [
+      "BTC Scalp Loop",
+      1
+    ],
+    [
+      "BTC Two-Way Reversion",
+      1
+    ]
+  ],
+  "validation_schemes": {
+    "single_window_in_sample": 1276
+  },
+  "period_days": {
+    "30": 156,
+    "1": 2,
+    "28": 12,
+    "23": 367,
+    "22": 737,
+    "26": 2
+  },
+  "top_20_by_reported_net_pnl": [
+    {
+      "stem": "btc-martingale-40-80-dc2b2e655aac",
+      "name": "BTC Martingale 40-80",
+      "dsl_sha256": "59f04766af5a911f9cd43d782bda50b803aa8f874af4d02c117aad8e81c5eb5c",
+      "net_pnl": 29529.97,
+      "roi_pct": 19686.65,
+      "sharpe_ratio": 0.11,
+      "total_trades": 12034,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 40,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-14T16:30:00Z",
+      "end_time": "2026-05-14T16:30:00Z"
+    },
+    {
+      "stem": "btc-martingale-40-80-551bce9b0f23",
+      "name": "BTC Martingale 40-80",
+      "dsl_sha256": "9e0293424a88afa2ba2730738215257a479f957bfeccbd1c315c0419330b5e1f",
+      "net_pnl": 29476.76,
+      "roi_pct": 19651.17,
+      "sharpe_ratio": 0.1,
+      "total_trades": 12008,
+      "markets_simulated": 2820,
+      "positions_settled_by_outcome": null,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-15T22:30:00Z",
+      "end_time": "2026-05-15T22:30:00Z"
+    },
+    {
+      "stem": "btc-martingale-40-80-fa5fb7e89806",
+      "name": "BTC Martingale 40-80",
+      "dsl_sha256": "f4ed1e8e717f02f4eb13869f36fde721729b3e450bd75fcea4972b28049d9721",
+      "net_pnl": 29470.36,
+      "roi_pct": 19646.91,
+      "sharpe_ratio": 0.09,
+      "total_trades": 17812,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 80,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-14T16:30:00Z",
+      "end_time": "2026-05-14T16:30:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-29b4b33371ca",
+      "name": "custom-on-kxbtc15m-29b4b33371ca",
+      "dsl_sha256": "b6f27bd06b824e293a820a5ba2c5e55f455657dc6f4fbaefaada12a0444799f5",
+      "net_pnl": 18781.02,
+      "roi_pct": 93905.1,
+      "sharpe_ratio": 0.07,
+      "total_trades": 12478,
+      "markets_simulated": 2831,
+      "positions_settled_by_outcome": 1200,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T14:46:00Z",
+      "end_time": "2026-05-11T14:45:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-0f3ff16aa281",
+      "name": "custom-on-kxbtc15m-0f3ff16aa281",
+      "dsl_sha256": "b6f27bd06b824e293a820a5ba2c5e55f455657dc6f4fbaefaada12a0444799f5",
+      "net_pnl": 18780.5,
+      "roi_pct": 93902.5,
+      "sharpe_ratio": 0.06,
+      "total_trades": 12494,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 1220,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T18:53:00Z",
+      "end_time": "2026-05-11T18:53:00Z"
+    },
+    {
+      "stem": "btc-velocity-martingale-4ba5df826087",
+      "name": "BTC Velocity Martingale",
+      "dsl_sha256": "a560be40f2f0365eff70af0d6674555e820b7a75a5d395132fffce598f67286a",
+      "net_pnl": 17330.66,
+      "roi_pct": 43326.65,
+      "sharpe_ratio": 0.09,
+      "total_trades": 11406,
+      "markets_simulated": 2820,
+      "positions_settled_by_outcome": null,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-16T00:01:00Z",
+      "end_time": "2026-05-16T00:01:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-a995e57a32fe",
+      "name": "custom-on-kxbtc15m-a995e57a32fe",
+      "dsl_sha256": "e2a7529f7076b12b0f25ba83f523a164d2c1c3002dddebeb00846485b7a93ac0",
+      "net_pnl": 17193.6,
+      "roi_pct": 85968,
+      "sharpe_ratio": 0.06,
+      "total_trades": 17786,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 18170,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T20:04:00Z",
+      "end_time": "2026-05-11T20:04:00Z"
+    },
+    {
+      "stem": "btc-velocity-martingale-bd972c85efe4",
+      "name": "BTC Velocity Martingale",
+      "dsl_sha256": "f0cc6573df7f12d5d2a426233d352c9d6ad16f78398623912a6f172dce0a01c9",
+      "net_pnl": 16954.79,
+      "roi_pct": 42386.98,
+      "sharpe_ratio": 0.1,
+      "total_trades": 11468,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 40,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-14T14:41:00Z",
+      "end_time": "2026-05-14T14:41:00Z"
+    },
+    {
+      "stem": "btc-velocity-martingale-371ea60c38bf",
+      "name": "BTC Velocity Martingale",
+      "dsl_sha256": "b90ee1debff4b0aff3ffee9bb57b89dc4ad20643c8d0eab4e7138e8264c0651d",
+      "net_pnl": 16922.93,
+      "roi_pct": 42307.33,
+      "sharpe_ratio": 0.1,
+      "total_trades": 11418,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 40,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-14T14:43:00Z",
+      "end_time": "2026-05-14T14:43:00Z"
+    },
+    {
+      "stem": "btc-velocity-martingale-4d576acf566b",
+      "name": "BTC Velocity Martingale",
+      "dsl_sha256": "c8f6c14e7c77e3fbbe5822bd6baf0b28d9abfced0957ac7793661ad44cf943f5",
+      "net_pnl": 16922.93,
+      "roi_pct": 42307.33,
+      "sharpe_ratio": 0.1,
+      "total_trades": 11418,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 40,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-14T14:43:00Z",
+      "end_time": "2026-05-14T14:43:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-a07e21e93af0",
+      "name": "custom-on-kxbtc15m-a07e21e93af0",
+      "dsl_sha256": "169a1da43e90e49ff165f88e93d6392e2896c24bbb05ca58c44b394bb721761a",
+      "net_pnl": 16904.05,
+      "roi_pct": 84520.25,
+      "sharpe_ratio": 0.07,
+      "total_trades": 11576,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 3820,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T19:33:00Z",
+      "end_time": "2026-05-11T19:33:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-d514a8608f34",
+      "name": "custom-on-kxbtc15m-d514a8608f34",
+      "dsl_sha256": "d63ea499e1f9105829921ce660f148fb6623720ecfa93149a74ecf80fee310e1",
+      "net_pnl": 16903.99,
+      "roi_pct": 84519.95,
+      "sharpe_ratio": 0.07,
+      "total_trades": 11588,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 40,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T19:00:00Z",
+      "end_time": "2026-05-11T19:00:00Z"
+    },
+    {
+      "stem": "btc-velocity-martingale-781a540adc76",
+      "name": "BTC Velocity Martingale",
+      "dsl_sha256": "b90ee1debff4b0aff3ffee9bb57b89dc4ad20643c8d0eab4e7138e8264c0651d",
+      "net_pnl": 16884.38,
+      "roi_pct": 42210.95,
+      "sharpe_ratio": 0.08,
+      "total_trades": 11406,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 40,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-15T13:38:00Z",
+      "end_time": "2026-05-15T13:38:00Z"
+    },
+    {
+      "stem": "15min-tester-may-14-b0804928430e",
+      "name": "15min Tester May 14",
+      "dsl_sha256": "02708795fa44ebdbd27fe3c9b79cdc35c471b19ec4b403090f554ffaa7283d26",
+      "net_pnl": 16821.76,
+      "roi_pct": 33643.52,
+      "sharpe_ratio": 0.1,
+      "total_trades": 11422,
+      "markets_simulated": 2819,
+      "positions_settled_by_outcome": 20,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-14T16:30:00Z",
+      "end_time": "2026-05-14T16:30:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-fcce04b2d81f",
+      "name": "custom-on-kxbtc15m-fcce04b2d81f",
+      "dsl_sha256": "d282f6d8a78fadcd93ea82cbcfdc9dd2bb5672fb702fcbbb5319ad4c32437391",
+      "net_pnl": 13629.11,
+      "roi_pct": 68145.55,
+      "sharpe_ratio": 0.06,
+      "total_trades": 14646,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 400,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-18T18:30:00Z",
+      "end_time": "2026-05-18T18:30:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-7eca3ddde4f2",
+      "name": "custom-on-kxbtc15m-7eca3ddde4f2",
+      "dsl_sha256": "99757aee128b588e92230fff7b806a59896768fdb0660e52c0d82d43c6cf0dc2",
+      "net_pnl": 12291.36,
+      "roi_pct": 61456.8,
+      "sharpe_ratio": 0.04,
+      "total_trades": 9574,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 13400,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T19:45:00Z",
+      "end_time": "2026-05-11T19:45:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-74df7edc0868",
+      "name": "custom-on-kxbtc15m-74df7edc0868",
+      "dsl_sha256": "68b87de825d001aa495e33fa97df9930f5bf1a7e93aaaf18c120560f8c88c199",
+      "net_pnl": 10582.17,
+      "roi_pct": 105821.7,
+      "sharpe_ratio": 0.06,
+      "total_trades": 12126,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 1500,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T17:30:00Z",
+      "end_time": "2026-05-11T17:30:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-82e7b1bbfa2b",
+      "name": "custom-on-kxbtc15m-82e7b1bbfa2b",
+      "dsl_sha256": "f54918e1821a8931443ddde7d9ba02afb17e75a8aa35b51e688dc4d0f079396e",
+      "net_pnl": 10131.51,
+      "roi_pct": 101315.1,
+      "sharpe_ratio": 0.07,
+      "total_trades": 12162,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 590,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-11T15:15:00Z",
+      "end_time": "2026-05-11T15:15:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-9e0d1371518b",
+      "name": "custom-on-kxbtc15m-9e0d1371518b",
+      "dsl_sha256": "d49b63fd2fa4887d0797432c4c6c1ea8e0a6c7dae7f57596258297239cd92a83",
+      "net_pnl": 8946.74,
+      "roi_pct": 44733.7,
+      "sharpe_ratio": 0.1,
+      "total_trades": 21277,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 1495,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-05T19:05:00Z",
+      "end_time": "2026-05-05T19:05:00Z"
+    },
+    {
+      "stem": "custom-on-kxbtc15m-2f97541a9503",
+      "name": "custom-on-kxbtc15m-2f97541a9503",
+      "dsl_sha256": "770bf71c5faf05eabb962fc600f9ec33403391ea2c6f0b0f7b2f150b4bf2941a",
+      "net_pnl": 8384.35,
+      "roi_pct": 83843.5,
+      "sharpe_ratio": 0.06,
+      "total_trades": 23638,
+      "markets_simulated": 2832,
+      "positions_settled_by_outcome": 7580,
+      "validation_scheme": "single_window_in_sample",
+      "start_time": "2026-04-05T15:30:00Z",
+      "end_time": "2026-05-05T15:30:00Z"
+    }
+  ],
+  "top_strategy_audit": {
+    "stem": "btc-martingale-40-80-dc2b2e655aac",
+    "reported_trades": 12034,
+    "reported_markets": 2819,
+    "reported_positions_settled_by_outcome": 40,
+    "reported_validation_scheme": "single_window_in_sample"
+  },
+  "evidence_class": "massively_multiple-tested_single-window_in_sample",
+  "promotion_eligible": false
+}

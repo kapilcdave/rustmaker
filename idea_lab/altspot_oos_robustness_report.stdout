@@ -1,0 +1,62 @@
+{
+  "chronological_halves_c": [
+    1.5162499999999988,
+    3.174531249999999
+  ],
+  "day_bootstrap_ci_c": [
+    0.32197009535228865,
+    4.377376185027783
+  ],
+  "evidence": "historical same-close non-atomic candle quotes",
+  "largest_day_share_gross_positive_pnl": 0.0912800773045624,
+  "mean_after_removing_best_10pct_days_c": 2.0144814090019554,
+  "mean_pnl_c": 2.345390624999999,
+  "mean_price_c": 27.119453125000003,
+  "per_asset": {
+    "HYPE": {
+      "mean_pnl_c": 3.1474694589877816,
+      "trades": 573
+    },
+    "NEAR": {
+      "mean_pnl_c": 2.317647058823529,
+      "trades": 323
+    },
+    "ZEC": {
+      "mean_pnl_c": 1.1718749999999996,
+      "trades": 384
+    }
+  },
+  "rule": "PREREG_altspot_tilt_20261006.md unchanged",
+  "stress": {
+    "0": {
+      "day_bootstrap_ci_c": [
+        0.32197009535228865,
+        4.377376185027783
+      ],
+      "mean_c": 2.345390624999999
+    },
+    "1": {
+      "day_bootstrap_ci_c": [
+        -0.6780299046477123,
+        3.377376185027783
+      ],
+      "mean_c": 1.345390624999998
+    },
+    "2": {
+      "day_bootstrap_ci_c": [
+        -1.6780299046477123,
+        2.377376185027782
+      ],
+      "mean_c": 0.3453906249999983
+    }
+  },
+  "trades": 1280,
+  "trades_by_k": {
+    "2": 198,
+    "3": 211,
+    "5": 338,
+    "8": 533
+  },
+  "utc_days": 22,
+  "win_rate": 0.31171875
+}

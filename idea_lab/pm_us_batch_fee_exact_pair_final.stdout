@@ -1,0 +1,17 @@
+{
+  "preregistration": "PREREG_pm_us_batch_fee_exact_pair_20261006.md",
+  "cutoff_ts": 1791302814.603325,
+  "raw_rows": 3104,
+  "fresh_depth_rows": 443,
+  "persistent_candidate_windows": 0,
+  "mean_margin_c": null,
+  "mean_stressed_margin_c": null,
+  "stressed_halves_c": [
+    null,
+    null
+  ],
+  "next_sample_survival": null,
+  "minimum_quantity": null,
+  "signals": [],
+  "passes_short_screen": false
+}

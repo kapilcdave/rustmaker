@@ -1,0 +1,18 @@
+{
+  "preregistration": "PREREG_pm_us_dual_maker_complete_set_20261006.md",
+  "cutoff_ts": 1791303001.936524,
+  "raw_rows": 2917,
+  "candidate_windows": 0,
+  "paired_strict_through_windows": 0,
+  "orphan_windows": 0,
+  "paired_fill_rate": null,
+  "orphan_rate": null,
+  "mean_paired_margin_c": null,
+  "paired_halves_c": [
+    null,
+    null
+  ],
+  "max_fill_gap_s": null,
+  "candidates": [],
+  "passes_short_screen": false
+}

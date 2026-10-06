@@ -1,0 +1,169 @@
+{
+  "preregistration": "PREREG_crossindex_outcome_audit_20261006.md",
+  "population_markets": 2105,
+  "matched": 2105,
+  "agreements": 2083,
+  "disagreements": 22,
+  "agreement_rate": 0.9895486935866984,
+  "agreement_wilson95": [
+    0.9842257517764552,
+    0.9930880493169982
+  ],
+  "continues_paper_risk_gate": false,
+  "mismatch_rows": [
+    {
+      "ticker": "KXBTC15M-26SEP140530-30",
+      "t0": 1789377300,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.2934519668684743
+    },
+    {
+      "ticker": "KXBTC15M-26SEP141200-00",
+      "t0": 1789400700,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.15276043840772857
+    },
+    {
+      "ticker": "KXBTC15M-26SEP150900-00",
+      "t0": 1789476300,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.3029569377277497
+    },
+    {
+      "ticker": "KXBTC15M-26SEP160715-15",
+      "t0": 1789556400,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.1515920260475312
+    },
+    {
+      "ticker": "KXBTC15M-26SEP190630-30",
+      "t0": 1789812900,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.07874107780470041
+    },
+    {
+      "ticker": "KXBTC15M-26SEP200645-45",
+      "t0": 1789900200,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.33982046027780655
+    },
+    {
+      "ticker": "KXBTC15M-26SEP230830-30",
+      "t0": 1790165700,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.5967531713046981
+    },
+    {
+      "ticker": "KXBTC15M-26SEP260800-00",
+      "t0": 1790423100,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.44675112718550736
+    },
+    {
+      "ticker": "KXBTC15M-26SEP270000-00",
+      "t0": 1790480700,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.3720838079668276
+    },
+    {
+      "ticker": "KXBTC15M-26SEP270730-30",
+      "t0": 1790507700,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.29798493868637976
+    },
+    {
+      "ticker": "KXBTC15M-26SEP291330-30",
+      "t0": 1790702100,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.1624348771511741
+    },
+    {
+      "ticker": "KXBTC15M-26SEP301415-15",
+      "t0": 1790791200,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.0845144425054567
+    },
+    {
+      "ticker": "KXBTC15M-26OCT021945-45",
+      "t0": 1790983800,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.21881638785803403
+    },
+    {
+      "ticker": "KXBTC15M-26OCT030200-00",
+      "t0": 1791006300,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.4289486704411871
+    },
+    {
+      "ticker": "KXBTC15M-26OCT031115-15",
+      "t0": 1791039600,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.33595804980302013
+    },
+    {
+      "ticker": "KXBTC15M-26OCT031145-45",
+      "t0": 1791041400,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.11552041534468316
+    },
+    {
+      "ticker": "KXBTC15M-26OCT031430-30",
+      "t0": 1791051300,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.3047735779426741
+    },
+    {
+      "ticker": "KXBTC15M-26OCT040045-45",
+      "t0": 1791088200,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.22520408678228243
+    },
+    {
+      "ticker": "KXBTC15M-26OCT040100-00",
+      "t0": 1791089100,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.08489559904734101
+    },
+    {
+      "ticker": "KXBTC15M-26OCT041130-30",
+      "t0": 1791126900,
+      "kalshi": "down",
+      "polymarket": "up",
+      "kalshi_move_bps": -0.5731323971003288
+    },
+    {
+      "ticker": "KXBTC15M-26OCT042115-15",
+      "t0": 1791162000,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.5815879636217325
+    },
+    {
+      "ticker": "KXBTC15M-26OCT051700-00",
+      "t0": 1791233100,
+      "kalshi": "up",
+      "polymarket": "down",
+      "kalshi_move_bps": 0.4382900440313975
+    }
+  ]
+}

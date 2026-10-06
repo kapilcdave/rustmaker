@@ -1,0 +1,19 @@
+{
+  "preregistration": "PREREG_mystic_done_deal_live_20261006.md",
+  "cutoff_ns": 1791298875631679000,
+  "evidence": "prospective sequential direct-orderbook paper",
+  "decisions": 30,
+  "complete_decisions": 28,
+  "operational_completion": 0.9333333333333333,
+  "signals": 0,
+  "settled": 0,
+  "losses": 0,
+  "mean_c": null,
+  "one_cent_stressed_mean_c": null,
+  "halves_c": [
+    null,
+    null
+  ],
+  "signal_rows": [],
+  "passes_short_screen": false
+}

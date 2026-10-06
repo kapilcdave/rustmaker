@@ -1,0 +1,61 @@
+{
+  "chronological_halves_c": [
+    14.999999999999996,
+    -4.0000000000000036
+  ],
+  "complete_decisions": 28,
+  "decisions": 28,
+  "largest_asset_share_gross_positive": 1.0,
+  "mean_pnl_c": 5.4999999999999964,
+  "operational_completion": 1.0,
+  "passes_operational_gate": true,
+  "passes_paper_economics_gate": false,
+  "per_asset_pnl": {
+    "BNB": 0.21999999999999986
+  },
+  "preregistration": "PREREG_altspot_tilt_live_20261006.md",
+  "settled_rows": [
+    {
+      "asset": "BNB",
+      "displayed_size": 16.0,
+      "k": 2,
+      "pnl": 0.63,
+      "price": 0.35,
+      "result": "no",
+      "side": "no",
+      "ticker": "KXBNB15M-26OCT061000-00"
+    },
+    {
+      "asset": "BNB",
+      "displayed_size": 16.0,
+      "k": 2,
+      "pnl": -0.33000000000000007,
+      "price": 0.31000000000000005,
+      "result": "no",
+      "side": "yes",
+      "ticker": "KXBNB15M-26OCT061030-30"
+    },
+    {
+      "asset": "BNB",
+      "displayed_size": 25.0,
+      "k": 2,
+      "pnl": -0.52,
+      "price": 0.5,
+      "result": "yes",
+      "side": "no",
+      "ticker": "KXBNB15M-26OCT061100-00"
+    },
+    {
+      "asset": "BNB",
+      "displayed_size": 254.71,
+      "k": 3,
+      "pnl": 0.43999999999999995,
+      "price": 0.54,
+      "result": "no",
+      "side": "no",
+      "ticker": "KXBNB15M-26OCT061145-45"
+    }
+  ],
+  "settled_signals": 4,
+  "signals": 4
+}

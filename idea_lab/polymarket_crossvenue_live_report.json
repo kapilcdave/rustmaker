@@ -1,0 +1,62 @@
+{
+  "preregistration": "PREREG_polymarket_crossvenue_live_20261006.md",
+  "cutoff_ns": 1791298597036698000,
+  "evidence": "prospective sequential direct-book paper",
+  "rows": 1563,
+  "complete_under_1000ms": 1309,
+  "best_margin_after_fee_allowance_c": 27.0,
+  "signals": 2,
+  "settled": 2,
+  "outcome_mismatches": 0,
+  "mean_c": 5.499999999999999,
+  "one_cent_per_leg_stressed_mean_c": 3.499999999999999,
+  "halves_c": [
+    7.9999999999999964,
+    3.0000000000000027
+  ],
+  "signal_rows": [
+    {
+      "pair": "kalshi_no_poly_up",
+      "kalshi_side": "no",
+      "poly_side": "up",
+      "kalshi_entry": 0.49,
+      "poly_entry": 0.4,
+      "displayed_size": 10.0,
+      "cost_after_fee_allowance": 0.92,
+      "margin": 0.07999999999999996,
+      "ticker": "KXBTC15M-26OCT061115-15",
+      "open_ts": 1791298800,
+      "close_ts": 1791299700,
+      "slug": "btc-updown-15m-1791298800",
+      "wall_ns": 1791299652403378000,
+      "request_span_ms": 357.027,
+      "kalshi_result": "yes",
+      "poly_result": "up",
+      "outcomes_match": true,
+      "realized_payout": 1.0,
+      "pnl": 0.07999999999999996
+    },
+    {
+      "pair": "kalshi_no_poly_up",
+      "kalshi_side": "no",
+      "poly_side": "up",
+      "kalshi_entry": 0.22999999999999998,
+      "poly_entry": 0.71,
+      "displayed_size": 25.0,
+      "cost_after_fee_allowance": 0.97,
+      "margin": 0.030000000000000027,
+      "ticker": "KXBTC15M-26OCT061145-45",
+      "open_ts": 1791300600,
+      "close_ts": 1791301500,
+      "slug": "btc-updown-15m-1791300600",
+      "wall_ns": 1791300929630198000,
+      "request_span_ms": 252.658,
+      "kalshi_result": "no",
+      "poly_result": "down",
+      "outcomes_match": true,
+      "realized_payout": 1.0,
+      "pnl": 0.030000000000000027
+    }
+  ],
+  "passes_short_screen": false
+}

@@ -1,0 +1,409 @@
+{
+  "preregistration": "PREREG_crypto_leader_rankcal_live_20261006.md",
+  "cutoff_ns": 1791298375016036000,
+  "evidence": "prospective sequential direct-orderbook paper",
+  "journal_rows": 2078,
+  "events": 9,
+  "decisions": 26,
+  "complete_decisions": 11,
+  "signals": 1,
+  "settled": 1,
+  "mean_c": -15.000000000000002,
+  "one_cent_stressed_mean_c": -16.0,
+  "halves_c": [
+    null,
+    -15.000000000000002
+  ],
+  "per_asset_pnl": {
+    "HYPE": -0.15000000000000002
+  },
+  "gross_positive_shares": {
+    "HYPE": null
+  },
+  "decision_rows": [
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "k": 5,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "k": 8,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061115",
+      "k": 5,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061115",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061115-ETH",
+      "open_ts": 1791298800,
+      "close_ts": 1791299700,
+      "wall_ns": 1791299283321489000,
+      "k": 8,
+      "complete": true,
+      "asset": "ETH",
+      "z": [
+        -0.23217572133341924,
+        -0.39554419190023477,
+        -0.03936880094528287,
+        -0.36664093354935895,
+        -0.2743850895570389
+      ],
+      "probability": 0.09458045479347023,
+      "ask": 0.030000000000000027,
+      "fee": 0.01,
+      "edge": 0.0545804547934702,
+      "displayed_size": 1.0,
+      "request_start_ns": 1791299283420317000,
+      "request_finish_ns": 1791299283522236000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061115",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061130-XRP",
+      "open_ts": 1791299700,
+      "close_ts": 1791300600,
+      "wall_ns": 1791300003163354000,
+      "k": 5,
+      "complete": true,
+      "asset": "XRP",
+      "z": [
+        -0.4552264130840284,
+        -0.6907319632847814,
+        0.09581190005716501,
+        -0.7241987372034213,
+        -1.4383399171302937
+      ],
+      "probability": 0.18256208995863774,
+      "ask": 0.15000000000000002,
+      "fee": 0.01,
+      "edge": 0.02256208995863771,
+      "displayed_size": 1.0,
+      "request_start_ns": 1791300003447750000,
+      "request_finish_ns": 1791300003544049000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061130-HYPE",
+      "open_ts": 1791299700,
+      "close_ts": 1791300600,
+      "wall_ns": 1791300182658783000,
+      "k": 8,
+      "complete": true,
+      "asset": "HYPE",
+      "z": [
+        -0.6946545843905648,
+        -0.6781111246870556,
+        -0.30310834162504274,
+        -0.843977379326061,
+        -0.5891994110926516
+      ],
+      "probability": 0.29727164908024123,
+      "ask": 0.14,
+      "fee": 0.01,
+      "edge": 0.1472716490802412,
+      "displayed_size": 120.0,
+      "request_start_ns": 1791300183077284000,
+      "request_finish_ns": 1791300183174718000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061145-ETH",
+      "open_ts": 1791300600,
+      "close_ts": 1791301500,
+      "wall_ns": 1791300903510778000,
+      "k": 5,
+      "complete": true,
+      "asset": "ETH",
+      "z": [
+        1.4867900957215974,
+        1.4605518781017257,
+        0.49639059211423425,
+        1.0981423816236016,
+        0.6887096157605113
+      ],
+      "probability": 0.25635453076675124,
+      "ask": 0.18999999999999995,
+      "fee": 0.02,
+      "edge": 0.04635453076675129,
+      "displayed_size": 2.0,
+      "request_start_ns": 1791300903732260000,
+      "request_finish_ns": 1791300903939860000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061145-XRP",
+      "open_ts": 1791300600,
+      "close_ts": 1791301500,
+      "wall_ns": 1791301084358854000,
+      "k": 8,
+      "complete": true,
+      "asset": "XRP",
+      "z": [
+        -0.3613109107555001,
+        0.05789712987459938,
+        -0.4999727154306122,
+        0.029964120096861915,
+        -0.3354393155748892
+      ],
+      "probability": 0.37585145807336995,
+      "ask": 0.31000000000000005,
+      "fee": 0.02,
+      "edge": 0.04585145807336989,
+      "displayed_size": 120.0,
+      "request_start_ns": 1791301084639243000,
+      "request_finish_ns": 1791301084748906000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061200",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061200-ETH",
+      "open_ts": 1791301500,
+      "close_ts": 1791302400,
+      "wall_ns": 1791301803013903000,
+      "k": 5,
+      "complete": true,
+      "asset": "ETH",
+      "z": [
+        -0.7484604209890308,
+        -0.6918587089130779,
+        -0.3167470855637811,
+        -1.2900879442272704,
+        0.821045311539617
+      ],
+      "probability": 0.04022161686367683,
+      "ask": 0.06999999999999995,
+      "fee": 0.01,
+      "edge": -0.03977838313632312,
+      "displayed_size": 120.0,
+      "request_start_ns": 1791301803107189000,
+      "request_finish_ns": 1791301803224243000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061200",
+      "k": 8,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061200",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061215",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061215-XRP",
+      "open_ts": 1791302400,
+      "close_ts": 1791303300,
+      "wall_ns": 1791302702662133000,
+      "k": 5,
+      "complete": true,
+      "asset": "XRP",
+      "z": [
+        0.4462824025454851,
+        0.5797628710375629,
+        2.007014845392317,
+        0.6114095938206148,
+        0.4656908652778585
+      ],
+      "probability": 0.11003132508161685,
+      "ask": 0.09999999999999998,
+      "fee": 0.01,
+      "edge": 3.132508161687343e-05,
+      "displayed_size": 1.0,
+      "request_start_ns": 1791302702963354000,
+      "request_finish_ns": 1791302703057453000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061215",
+      "k": 8,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061215",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061230",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061230-XRP",
+      "open_ts": 1791303300,
+      "close_ts": 1791304200,
+      "wall_ns": 1791303603137490000,
+      "k": 5,
+      "complete": true,
+      "asset": "XRP",
+      "z": [
+        0.02674521318612514,
+        0.2417686742963717,
+        0.0,
+        1.3499504740678478,
+        0.155557544531349
+      ],
+      "probability": 0.664580517410646,
+      "ask": 0.6599999999999999,
+      "fee": 0.02,
+      "edge": -0.015419482589353866,
+      "displayed_size": 122.0,
+      "request_start_ns": 1791303603768088000,
+      "request_finish_ns": 1791303603893949000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061230",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061230-SOL",
+      "open_ts": 1791303300,
+      "close_ts": 1791304200,
+      "wall_ns": 1791303783345681000,
+      "k": 8,
+      "complete": true,
+      "asset": "SOL",
+      "z": [
+        -0.7339410433089534,
+        -0.29906515247905546,
+        -0.991553237051134,
+        0.3455444250546578,
+        -1.0674933795236126
+      ],
+      "probability": 0.051546473056211115,
+      "ask": 0.020000000000000018,
+      "fee": 0.01,
+      "edge": 0.021546473056211095,
+      "displayed_size": 1.0,
+      "request_start_ns": 1791303783949081000,
+      "request_finish_ns": 1791303784299444000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061230",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061245",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061245-XRP",
+      "open_ts": 1791304200,
+      "close_ts": 1791305100,
+      "wall_ns": 1791304505621478000,
+      "k": 5,
+      "complete": true,
+      "asset": "XRP",
+      "z": [
+        -0.9379011279497218,
+        -0.6556015778119811,
+        -0.5149202181499584,
+        -1.09067111381233,
+        -1.7553509856280436
+      ],
+      "probability": 0.19554781001422064,
+      "ask": 0.12,
+      "fee": 0.01,
+      "edge": 0.06554781001422065,
+      "displayed_size": 1.0,
+      "request_start_ns": 1791304507886380000,
+      "request_finish_ns": 1791304508245923000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061245",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061245-XRP",
+      "open_ts": 1791304200,
+      "close_ts": 1791305100,
+      "wall_ns": 1791304684786259000,
+      "k": 8,
+      "complete": true,
+      "asset": "XRP",
+      "z": [
+        -1.1392170295290243,
+        -1.039644200587804,
+        -0.999860152924238,
+        -1.5930169648911199,
+        -1.556274843258227
+      ],
+      "probability": 0.1473673707231688,
+      "ask": 0.050000000000000044,
+      "fee": 0.01,
+      "edge": 0.08736737072316876,
+      "displayed_size": 120.0,
+      "request_start_ns": 1791304685080775000,
+      "request_finish_ns": 1791304685173348000
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061245",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061300",
+      "k": 5,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061300",
+      "k": 8,
+      "complete": false,
+      "reason": "no_timely_book"
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061300",
+      "k": 12,
+      "complete": false,
+      "reason": "no_timely_book"
+    }
+  ],
+  "signal_rows": [
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "ticker": "KXCRYPTOLEAD15M-26OCT061130-HYPE",
+      "open_ts": 1791299700,
+      "close_ts": 1791300600,
+      "wall_ns": 1791300182658783000,
+      "k": 8,
+      "complete": true,
+      "asset": "HYPE",
+      "z": [
+        -0.6946545843905648,
+        -0.6781111246870556,
+        -0.30310834162504274,
+        -0.843977379326061,
+        -0.5891994110926516
+      ],
+      "probability": 0.29727164908024123,
+      "ask": 0.14,
+      "fee": 0.01,
+      "edge": 0.1472716490802412,
+      "displayed_size": 120.0,
+      "request_start_ns": 1791300183077284000,
+      "request_finish_ns": 1791300183174718000,
+      "result": "no",
+      "payout": 0.0,
+      "pnl": -0.15000000000000002
+    }
+  ],
+  "passes_short_prospective_screen": false
+}

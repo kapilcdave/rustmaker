@@ -1,0 +1,191 @@
+{
+  "preregistration": "PREREG_crypto_leader_directional_implication_20261006.md",
+  "evidence": "prospective sequential direct-orderbook paper",
+  "rows": 2982,
+  "complete_rows": 1500,
+  "events": 8,
+  "best": {
+    "L_BTC+U_ETH=>U_BTC": {
+      "relation": "L_BTC+U_ETH=>U_BTC",
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "cost": 1.1049999999999998,
+      "margin": -0.10499999999999976,
+      "margin_after_1c_per_leg": -0.13499999999999976,
+      "displayed_size": 120.0,
+      "wall_ns": 1791298680629057000
+    },
+    "L_BTC+U_SOL=>U_BTC": {
+      "relation": "L_BTC+U_SOL=>U_BTC",
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "cost": 1.1159999999999999,
+      "margin": -0.11599999999999988,
+      "margin_after_1c_per_leg": -0.14599999999999988,
+      "displayed_size": 25.0,
+      "wall_ns": 1791298680629057000
+    },
+    "L_BTC+U_HYPE=>U_BTC": {
+      "relation": "L_BTC+U_HYPE=>U_BTC",
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "cost": 1.1189999999999998,
+      "margin": -0.11899999999999977,
+      "margin_after_1c_per_leg": -0.14899999999999977,
+      "displayed_size": 8.0,
+      "wall_ns": 1791298680629057000
+    },
+    "L_ETH+U_BTC=>U_ETH": {
+      "relation": "L_ETH+U_BTC=>U_ETH",
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "cost": 1.228,
+      "margin": -0.22799999999999998,
+      "margin_after_1c_per_leg": -0.258,
+      "displayed_size": 120.0,
+      "wall_ns": 1791301436980643000
+    },
+    "L_ETH+U_SOL=>U_ETH": {
+      "relation": "L_ETH+U_SOL=>U_ETH",
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "cost": 1.228,
+      "margin": -0.22799999999999998,
+      "margin_after_1c_per_leg": -0.258,
+      "displayed_size": 120.0,
+      "wall_ns": 1791301436980643000
+    },
+    "L_ETH+U_HYPE=>U_ETH": {
+      "relation": "L_ETH+U_HYPE=>U_ETH",
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "cost": 1.13,
+      "margin": -0.1299999999999999,
+      "margin_after_1c_per_leg": -0.1599999999999999,
+      "displayed_size": 120.0,
+      "wall_ns": 1791301449110069000
+    },
+    "L_SOL+U_BTC=>U_SOL": {
+      "relation": "L_SOL+U_BTC=>U_SOL",
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "cost": 1.293,
+      "margin": -0.2929999999999999,
+      "margin_after_1c_per_leg": -0.32299999999999995,
+      "displayed_size": 5.0,
+      "wall_ns": 1791300409838063000
+    },
+    "L_SOL+U_ETH=>U_SOL": {
+      "relation": "L_SOL+U_ETH=>U_SOL",
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "cost": 1.291,
+      "margin": -0.2909999999999999,
+      "margin_after_1c_per_leg": -0.32099999999999995,
+      "displayed_size": 5.0,
+      "wall_ns": 1791300409838063000
+    },
+    "L_SOL+U_HYPE=>U_SOL": {
+      "relation": "L_SOL+U_HYPE=>U_SOL",
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "cost": 1.2919999999999998,
+      "margin": -0.2919999999999998,
+      "margin_after_1c_per_leg": -0.32199999999999984,
+      "displayed_size": 5.0,
+      "wall_ns": 1791300409838063000
+    },
+    "L_HYPE+U_BTC=>U_HYPE": {
+      "relation": "L_HYPE+U_BTC=>U_HYPE",
+      "event": "KXCRYPTOLEAD15M-26OCT061115",
+      "cost": 1.37,
+      "margin": -0.3700000000000001,
+      "margin_after_1c_per_leg": -0.40000000000000013,
+      "displayed_size": 20.0,
+      "wall_ns": 1791299537829920000
+    },
+    "L_HYPE+U_ETH=>U_HYPE": {
+      "relation": "L_HYPE+U_ETH=>U_HYPE",
+      "event": "KXCRYPTOLEAD15M-26OCT061115",
+      "cost": 1.288,
+      "margin": -0.28800000000000003,
+      "margin_after_1c_per_leg": -0.31800000000000006,
+      "displayed_size": 78.0,
+      "wall_ns": 1791299638660015000
+    },
+    "L_HYPE+U_SOL=>U_HYPE": {
+      "relation": "L_HYPE+U_SOL=>U_HYPE",
+      "event": "KXCRYPTOLEAD15M-26OCT061115",
+      "cost": 1.176,
+      "margin": -0.17599999999999993,
+      "margin_after_1c_per_leg": -0.20599999999999993,
+      "displayed_size": 33.0,
+      "wall_ns": 1791299638660015000
+    },
+    "L_BTC+U_XRP=>U_BTC": {
+      "relation": "L_BTC+U_XRP=>U_BTC",
+      "event": "KXCRYPTOLEAD15M-26OCT061100",
+      "cost": 1.1329999999999998,
+      "margin": -0.13299999999999979,
+      "margin_after_1c_per_leg": -0.16299999999999978,
+      "displayed_size": 10.0,
+      "wall_ns": 1791298680629057000
+    },
+    "L_ETH+U_XRP=>U_ETH": {
+      "relation": "L_ETH+U_XRP=>U_ETH",
+      "event": "KXCRYPTOLEAD15M-26OCT061145",
+      "cost": 1.0699999999999998,
+      "margin": -0.06999999999999984,
+      "margin_after_1c_per_leg": -0.09999999999999984,
+      "displayed_size": 65.0,
+      "wall_ns": 1791301455349514000
+    },
+    "L_SOL+U_XRP=>U_SOL": {
+      "relation": "L_SOL+U_XRP=>U_SOL",
+      "event": "KXCRYPTOLEAD15M-26OCT061130",
+      "cost": 1.2879999999999998,
+      "margin": -0.2879999999999998,
+      "margin_after_1c_per_leg": -0.31799999999999984,
+      "displayed_size": 5.0,
+      "wall_ns": 1791300409838063000
+    },
+    "L_XRP+U_BTC=>U_XRP": {
+      "relation": "L_XRP+U_BTC=>U_XRP",
+      "event": "KXCRYPTOLEAD15M-26OCT061045",
+      "cost": 1.281,
+      "margin": -0.2809999999999999,
+      "margin_after_1c_per_leg": -0.31099999999999994,
+      "displayed_size": 97.0,
+      "wall_ns": 1791297669285885000
+    },
+    "L_XRP+U_ETH=>U_XRP": {
+      "relation": "L_XRP+U_ETH=>U_XRP",
+      "event": "KXCRYPTOLEAD15M-26OCT061045",
+      "cost": 1.283,
+      "margin": -0.2829999999999999,
+      "margin_after_1c_per_leg": -0.31299999999999994,
+      "displayed_size": 35.0,
+      "wall_ns": 1791297669285885000
+    },
+    "L_XRP+U_SOL=>U_XRP": {
+      "relation": "L_XRP+U_SOL=>U_XRP",
+      "event": "KXCRYPTOLEAD15M-26OCT061045",
+      "cost": 1.263,
+      "margin": -0.2629999999999999,
+      "margin_after_1c_per_leg": -0.2929999999999999,
+      "displayed_size": 3.0,
+      "wall_ns": 1791297669285885000
+    },
+    "L_XRP+U_HYPE=>U_XRP": {
+      "relation": "L_XRP+U_HYPE=>U_XRP",
+      "event": "KXCRYPTOLEAD15M-26OCT061045",
+      "cost": 1.29,
+      "margin": -0.29000000000000004,
+      "margin_after_1c_per_leg": -0.32000000000000006,
+      "displayed_size": 32.0,
+      "wall_ns": 1791297669285885000
+    },
+    "L_HYPE+U_XRP=>U_HYPE": {
+      "relation": "L_HYPE+U_XRP=>U_HYPE",
+      "event": "KXCRYPTOLEAD15M-26OCT061045",
+      "cost": 1.47,
+      "margin": -0.47,
+      "margin_after_1c_per_leg": -0.5,
+      "displayed_size": 8.0,
+      "wall_ns": 1791297436768041000
+    }
+  },
+  "signals": [],
+  "passes_direct_book_screen": false
+}

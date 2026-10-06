@@ -1,0 +1,18 @@
+{
+  "preregistration": "PREREG_pm_us_exact_pair_live_20261006.md",
+  "cutoff_ts": 1791302112.315213,
+  "raw_rows": 2695,
+  "fresh_paired_rows": 443,
+  "persistent_candidate_windows": 0,
+  "mean_raw_net_c": null,
+  "mean_stressed_net_c": null,
+  "stressed_halves_c": [
+    null,
+    null
+  ],
+  "next_sample_known": 0,
+  "next_sample_survival": null,
+  "minimum_displayed_size": null,
+  "signals": [],
+  "passes_short_screen": false
+}

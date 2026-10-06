@@ -1,0 +1,346 @@
+{
+  "preregistration": "PREREG_crypto_leader_covariance_20261006.md",
+  "evidence": "historical Coinbase/Kalshi same-minute candle paper",
+  "sample_events": 176,
+  "eligible_events": 165,
+  "trades": 25,
+  "mean_c": -15.600000000000003,
+  "se_c": 5.872174384331582,
+  "lo95_c": -27.109461793289903,
+  "one_cent_stressed_mean_c": -16.6,
+  "halves_c": [
+    -7.333333333333335,
+    -23.23076923076923
+  ],
+  "mean_ex_best_10pct_days_c": -22.61904761904762,
+  "per_asset": {
+    "BTC": {
+      "n": 2,
+      "mean_c": -28.000000000000004,
+      "gross_positive_share": 0.0
+    },
+    "ETH": {
+      "n": 2,
+      "mean_c": -19.5,
+      "gross_positive_share": 0.0
+    },
+    "HYPE": {
+      "n": 16,
+      "mean_c": -21.1875,
+      "gross_positive_share": 0.0
+    },
+    "SOL": {
+      "n": 1,
+      "mean_c": 86.0,
+      "gross_positive_share": 0.5180722891566265
+    },
+    "XRP": {
+      "n": 4,
+      "mean_c": -10.5,
+      "gross_positive_share": 0.4819277108433735
+    }
+  },
+  "trade_rows": [
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT011800",
+      "asset": "SOL",
+      "t0": 1790891100,
+      "day": 20727,
+      "k": 5,
+      "ask": 0.13,
+      "probability": 0.2831,
+      "edge": 0.1431,
+      "payout": 1.0,
+      "pnl": 0.86
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT012130",
+      "asset": "BTC",
+      "t0": 1790903700,
+      "day": 20728,
+      "k": 8,
+      "ask": 0.4,
+      "probability": 0.5848,
+      "edge": 0.16479999999999997,
+      "payout": 0.0,
+      "pnl": -0.42000000000000004
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT021000",
+      "asset": "HYPE",
+      "t0": 1790948700,
+      "day": 20728,
+      "k": 12,
+      "ask": 0.37,
+      "probability": 0.58175,
+      "edge": 0.19175,
+      "payout": 0.0,
+      "pnl": -0.39
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT021630",
+      "asset": "XRP",
+      "t0": 1790972100,
+      "day": 20728,
+      "k": 5,
+      "ask": 0.18,
+      "probability": 0.36695,
+      "edge": 0.16695000000000002,
+      "payout": 1.0,
+      "pnl": 0.8
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT030845",
+      "asset": "HYPE",
+      "t0": 1791030600,
+      "day": 20729,
+      "k": 5,
+      "ask": 0.29,
+      "probability": 0.44195,
+      "edge": 0.13195000000000004,
+      "payout": 0.0,
+      "pnl": -0.31
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT031330",
+      "asset": "XRP",
+      "t0": 1791047700,
+      "day": 20729,
+      "k": 12,
+      "ask": 0.47,
+      "probability": 0.6897,
+      "edge": 0.19970000000000002,
+      "payout": 0.0,
+      "pnl": -0.49
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26OCT041000",
+      "asset": "HYPE",
+      "t0": 1791121500,
+      "day": 20730,
+      "k": 5,
+      "ask": 0.16,
+      "probability": 0.38075,
+      "edge": 0.21074999999999997,
+      "payout": 0.0,
+      "pnl": -0.17
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP141215",
+      "asset": "HYPE",
+      "t0": 1789401600,
+      "day": 20710,
+      "k": 12,
+      "ask": 0.1,
+      "probability": 0.24595,
+      "edge": 0.13595,
+      "payout": 0.0,
+      "pnl": -0.11
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP141345",
+      "asset": "HYPE",
+      "t0": 1789407000,
+      "day": 20710,
+      "k": 5,
+      "ask": 0.08,
+      "probability": 0.2281,
+      "edge": 0.1381,
+      "payout": 0.0,
+      "pnl": -0.09
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP141730",
+      "asset": "HYPE",
+      "t0": 1789420500,
+      "day": 20710,
+      "k": 8,
+      "ask": 0.16,
+      "probability": 0.3565,
+      "edge": 0.18649999999999997,
+      "payout": 0.0,
+      "pnl": -0.17
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP151315",
+      "asset": "XRP",
+      "t0": 1789491600,
+      "day": 20711,
+      "k": 12,
+      "ask": 0.05,
+      "probability": 0.171,
+      "edge": 0.11100000000000002,
+      "payout": 0.0,
+      "pnl": -0.060000000000000005
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP160930",
+      "asset": "HYPE",
+      "t0": 1789564500,
+      "day": 20712,
+      "k": 8,
+      "ask": 0.31,
+      "probability": 0.49205,
+      "edge": 0.16205,
+      "payout": 0.0,
+      "pnl": -0.33
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP161415",
+      "asset": "XRP",
+      "t0": 1789581600,
+      "day": 20712,
+      "k": 5,
+      "ask": 0.65,
+      "probability": 0.83365,
+      "edge": 0.16365,
+      "payout": 0.0,
+      "pnl": -0.67
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP162230",
+      "asset": "HYPE",
+      "t0": 1789611300,
+      "day": 20713,
+      "k": 12,
+      "ask": 0.11,
+      "probability": 0.3315,
+      "edge": 0.21150000000000002,
+      "payout": 0.0,
+      "pnl": -0.12
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP170100",
+      "asset": "HYPE",
+      "t0": 1789620300,
+      "day": 20713,
+      "k": 8,
+      "ask": 0.04,
+      "probability": 0.153,
+      "edge": 0.103,
+      "payout": 0.0,
+      "pnl": -0.05
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP170245",
+      "asset": "HYPE",
+      "t0": 1789626600,
+      "day": 20713,
+      "k": 8,
+      "ask": 0.15,
+      "probability": 0.26135,
+      "edge": 0.10135000000000004,
+      "payout": 0.0,
+      "pnl": -0.16
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP172145",
+      "asset": "ETH",
+      "t0": 1789695000,
+      "day": 20714,
+      "k": 12,
+      "ask": 0.21,
+      "probability": 0.60845,
+      "edge": 0.37845000000000006,
+      "payout": 0.0,
+      "pnl": -0.22999999999999998
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP190430",
+      "asset": "HYPE",
+      "t0": 1789805700,
+      "day": 20715,
+      "k": 5,
+      "ask": 0.39,
+      "probability": 0.59755,
+      "edge": 0.18755000000000002,
+      "payout": 0.0,
+      "pnl": -0.41000000000000003
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP192100",
+      "asset": "HYPE",
+      "t0": 1789865100,
+      "day": 20716,
+      "k": 5,
+      "ask": 0.15,
+      "probability": 0.29855,
+      "edge": 0.13854999999999998,
+      "payout": 0.0,
+      "pnl": -0.16
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP211645",
+      "asset": "BTC",
+      "t0": 1790022600,
+      "day": 20717,
+      "k": 8,
+      "ask": 0.13,
+      "probability": 0.2451,
+      "edge": 0.10510000000000001,
+      "payout": 0.0,
+      "pnl": -0.14
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP212115",
+      "asset": "HYPE",
+      "t0": 1790038800,
+      "day": 20718,
+      "k": 12,
+      "ask": 0.44,
+      "probability": 0.5795,
+      "edge": 0.11950000000000001,
+      "payout": 0.0,
+      "pnl": -0.46
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP260530",
+      "asset": "ETH",
+      "t0": 1790414100,
+      "day": 20722,
+      "k": 8,
+      "ask": 0.15,
+      "probability": 0.3139,
+      "edge": 0.1539,
+      "payout": 0.0,
+      "pnl": -0.16
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP271445",
+      "asset": "HYPE",
+      "t0": 1790533800,
+      "day": 20723,
+      "k": 5,
+      "ask": 0.15,
+      "probability": 0.43035,
+      "edge": 0.27035,
+      "payout": 0.0,
+      "pnl": -0.16
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP272030",
+      "asset": "HYPE",
+      "t0": 1790554500,
+      "day": 20724,
+      "k": 5,
+      "ask": 0.12,
+      "probability": 0.2604,
+      "edge": 0.13040000000000002,
+      "payout": 0.0,
+      "pnl": -0.13
+    },
+    {
+      "event": "KXCRYPTOLEAD15M-26SEP291100",
+      "asset": "HYPE",
+      "t0": 1790693100,
+      "day": 20725,
+      "k": 5,
+      "ask": 0.16,
+      "probability": 0.30735,
+      "edge": 0.13735,
+      "payout": 0.0,
+      "pnl": -0.17
+    }
+  ],
+  "passes_paper_screen": false
+}

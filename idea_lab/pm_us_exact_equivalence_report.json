@@ -1,0 +1,72 @@
+{
+  "pairs": 5,
+  "equivalent_pairs": 5,
+  "all_equivalent": true,
+  "rows": [
+    {
+      "slug": "cpc-btc-updown-15m-2026-10-06-1545z",
+      "ticker": "KXBTC15M-26OCT061200-00",
+      "equivalent": true,
+      "reasons": [],
+      "pm_window_start": "2026-10-06T15:45:00Z",
+      "pm_window_end": "2026-10-06T16:00:00Z",
+      "kalshi_open": "2026-10-06T15:45:00Z",
+      "kalshi_close": "2026-10-06T16:00:00Z",
+      "pm_strike": 86105.99,
+      "kalshi_strike": 86105.99,
+      "strike_delta": 0.0
+    },
+    {
+      "slug": "cpc-btc-updown-15m-2026-10-06-1600z",
+      "ticker": "KXBTC15M-26OCT061215-15",
+      "equivalent": true,
+      "reasons": [],
+      "pm_window_start": "2026-10-06T16:00:00Z",
+      "pm_window_end": "2026-10-06T16:15:00Z",
+      "kalshi_open": "2026-10-06T16:00:00Z",
+      "kalshi_close": "2026-10-06T16:15:00Z",
+      "pm_strike": 85735.8,
+      "kalshi_strike": 85735.8,
+      "strike_delta": 0.0
+    },
+    {
+      "slug": "cpc-btc-updown-15m-2026-10-06-1615z",
+      "ticker": "KXBTC15M-26OCT061230-30",
+      "equivalent": true,
+      "reasons": [],
+      "pm_window_start": "2026-10-06T16:15:00Z",
+      "pm_window_end": "2026-10-06T16:30:00Z",
+      "kalshi_open": "2026-10-06T16:15:00Z",
+      "kalshi_close": "2026-10-06T16:30:00Z",
+      "pm_strike": 85758.97,
+      "kalshi_strike": 85758.97,
+      "strike_delta": 0.0
+    },
+    {
+      "slug": "cpc-btc-updown-15m-2026-10-06-1630z",
+      "ticker": "KXBTC15M-26OCT061245-45",
+      "equivalent": true,
+      "reasons": [],
+      "pm_window_start": "2026-10-06T16:30:00Z",
+      "pm_window_end": "2026-10-06T16:45:00Z",
+      "kalshi_open": "2026-10-06T16:30:00Z",
+      "kalshi_close": "2026-10-06T16:45:00Z",
+      "pm_strike": 85730.54,
+      "kalshi_strike": 85730.54,
+      "strike_delta": 0.0
+    },
+    {
+      "slug": "cpc-btc-updown-15m-2026-10-06-1645z",
+      "ticker": "KXBTC15M-26OCT061300-00",
+      "equivalent": true,
+      "reasons": [],
+      "pm_window_start": "2026-10-06T16:45:00Z",
+      "pm_window_end": "2026-10-06T17:00:00Z",
+      "kalshi_open": "2026-10-06T16:45:00Z",
+      "kalshi_close": "2026-10-06T17:00:00Z",
+      "pm_strike": 85690.16,
+      "kalshi_strike": 85690.16,
+      "strike_delta": 0.0
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "preregistration": "PREREG_btc_cushion_m3_live_20261006.md",
+  "cutoff_ns": 1791302699288579000,
+  "records": 4,
+  "decisions": 3,
+  "signals": 0,
+  "settled": 0,
+  "mean_c": null,
+  "extra_1c_stress_c": null,
+  "halves_c": [
+    null,
+    null
+  ],
+  "rows": [],
+  "passes_short_screen": false
+}

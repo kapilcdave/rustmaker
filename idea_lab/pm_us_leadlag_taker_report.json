@@ -1,0 +1,21 @@
+{
+  "preregistration": "PREREG_pm_us_leadlag_taker_20261006.md",
+  "cutoff_ts": 1791302550.933293,
+  "raw_rows": 3367,
+  "fresh_paired_rows": 493,
+  "persistent_signal_windows": 0,
+  "settled": 0,
+  "mean_c": null,
+  "extra_1c_stress_c": null,
+  "halves_c": [
+    null,
+    null
+  ],
+  "next_sample_known": 0,
+  "next_sample_survival": null,
+  "minimum_displayed_size": null,
+  "gross_positive_shares": {},
+  "signals": [],
+  "settled_rows": [],
+  "passes_short_screen": false
+}

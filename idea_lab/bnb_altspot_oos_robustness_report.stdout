@@ -1,0 +1,54 @@
+{
+  "chronological_halves_c": [
+    7.541020408163264,
+    5.974949083503054
+  ],
+  "day_bootstrap_ci_c": [
+    4.2722046657734865,
+    9.267879292141256
+  ],
+  "evidence": "historical same-close non-atomic candle quotes",
+  "largest_day_share_gross_positive_pnl": 0.06399859729101828,
+  "mean_after_removing_best_10pct_days_c": 5.664311377245509,
+  "mean_pnl_c": 6.757186544342505,
+  "mean_price_c": 29.289704383282366,
+  "per_asset": {
+    "BNB": {
+      "mean_pnl_c": 6.757186544342505,
+      "trades": 981
+    }
+  },
+  "rule": "PREREG_altspot_tilt_20261006.md unchanged",
+  "stress": {
+    "0": {
+      "day_bootstrap_ci_c": [
+        4.2722046657734865,
+        9.267879292141256
+      ],
+      "mean_c": 6.757186544342505
+    },
+    "1": {
+      "day_bootstrap_ci_c": [
+        3.2722046657734856,
+        8.267879292141256
+      ],
+      "mean_c": 5.757186544342505
+    },
+    "2": {
+      "day_bootstrap_ci_c": [
+        2.272204665773486,
+        7.267879292141253
+      ],
+      "mean_c": 4.757186544342504
+    }
+  },
+  "trades": 981,
+  "trades_by_k": {
+    "2": 227,
+    "3": 223,
+    "5": 242,
+    "8": 289
+  },
+  "utc_days": 22,
+  "win_rate": 0.3781855249745158
+}

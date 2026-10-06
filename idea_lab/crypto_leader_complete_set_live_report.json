@@ -1,0 +1,81 @@
+{
+  "preregistration": "PREREG_crypto_leader_complete_set_20261006.md",
+  "evidence": "prospective sequential direct-orderbook paper",
+  "rows": 3764,
+  "complete": 1957,
+  "events": 8,
+  "best": {
+    "all_yes": {
+      "name": "all_yes",
+      "legs": 5,
+      "cost": 1.03,
+      "worst_payout": 0.99,
+      "margin": -0.040000000000000036,
+      "margin_after_1c_per_leg": -0.09000000000000004,
+      "displayed_size": 1.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061045"
+    },
+    "all_no": {
+      "name": "all_no",
+      "legs": 5,
+      "cost": 4.08,
+      "worst_payout": 4.0,
+      "margin": -0.08000000000000007,
+      "margin_after_1c_per_leg": -0.13000000000000006,
+      "displayed_size": 1.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061100"
+    },
+    "four_no_omit_BTC": {
+      "name": "four_no_omit_BTC",
+      "legs": 4,
+      "cost": 3.09,
+      "worst_payout": 3.0,
+      "margin": -0.08999999999999986,
+      "margin_after_1c_per_leg": -0.12999999999999987,
+      "displayed_size": 2.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061215"
+    },
+    "four_no_omit_ETH": {
+      "name": "four_no_omit_ETH",
+      "legs": 4,
+      "cost": 3.0900000000000003,
+      "worst_payout": 3.0,
+      "margin": -0.0900000000000003,
+      "margin_after_1c_per_leg": -0.1300000000000003,
+      "displayed_size": 1.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061100"
+    },
+    "four_no_omit_SOL": {
+      "name": "four_no_omit_SOL",
+      "legs": 4,
+      "cost": 3.11,
+      "worst_payout": 3.0,
+      "margin": -0.10999999999999988,
+      "margin_after_1c_per_leg": -0.14999999999999988,
+      "displayed_size": 67.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061200"
+    },
+    "four_no_omit_XRP": {
+      "name": "four_no_omit_XRP",
+      "legs": 4,
+      "cost": 3.1,
+      "worst_payout": 3.0,
+      "margin": -0.10000000000000009,
+      "margin_after_1c_per_leg": -0.1400000000000001,
+      "displayed_size": 1.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061100"
+    },
+    "four_no_omit_HYPE": {
+      "name": "four_no_omit_HYPE",
+      "legs": 4,
+      "cost": 3.1799999999999997,
+      "worst_payout": 3.0,
+      "margin": -0.17999999999999972,
+      "margin_after_1c_per_leg": -0.21999999999999972,
+      "displayed_size": 2.0,
+      "event": "KXCRYPTOLEAD15M-26OCT061130"
+    }
+  },
+  "signals": [],
+  "passes_direct_book_screen": false
+}

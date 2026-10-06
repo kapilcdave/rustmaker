@@ -1,0 +1,59 @@
+{
+  "descriptive_best_edge_per_hour": {
+    "hours": 757,
+    "max_c": 4.000000000000005,
+    "mean_c": -3.3792602377807137,
+    "over_1c_hours": 8,
+    "over_2c_hours": 3,
+    "p50_c": -1.3000000000000003,
+    "p90_c": -1.1,
+    "p99_c": 0.7759999999999684,
+    "positive_hours": 14
+  },
+  "evidence": "historical non-atomic one-minute candle-close upper bound",
+  "hourly_internal_descriptive_best_edge_per_hour": {
+    "hours": 757,
+    "max_c": -2.0,
+    "mean_c": -22.02906208718626,
+    "over_1c_hours": 0,
+    "over_2c_hours": 0,
+    "p50_c": -11.000000000000007,
+    "p90_c": -2.000000000000001,
+    "p99_c": -2.000000000000001,
+    "positive_hours": 0
+  },
+  "hourly_internal_opportunities": 0,
+  "hourly_internal_passes_historical_promotion_gate": false,
+  "integrity": {
+    "hours": 765,
+    "hours_with_both_brackets": 757,
+    "matching_expiration_values": 757,
+    "matching_index_rules": 757,
+    "settlement_dominance_checks": 1514,
+    "settlement_dominance_violations": [],
+    "utc_days": 34
+  },
+  "opportunities": 3,
+  "passes_historical_promotion_gate": false,
+  "preregistration": "PREREG_btc_hourly_dominance_20261006.md",
+  "summary": {
+    "chronological_halves_after_1c_per_leg_stress_c": [
+      2.000000000000005,
+      1.500000000000005
+    ],
+    "day_cluster_ci_after_1c_per_leg_stress_c": [
+      1.0000000000000058,
+      2.000000000000005
+    ],
+    "largest_day_share_of_gross_positive_edge": 0.7272727272727272,
+    "mean_after_removing_best_10pct_days_and_1c_per_leg_stress_c": 1.0000000000000058,
+    "mean_guaranteed_edge_c": 3.6666666666666714,
+    "mean_realized_pnl_c": 3.6666666666666714,
+    "median_guaranteed_edge_c": 4.000000000000005,
+    "stress_per_leg_c": {
+      "0.0": 3.6666666666666714,
+      "0.5": 2.6666666666666714,
+      "1.0": 1.6666666666666714
+    }
+  }
+}

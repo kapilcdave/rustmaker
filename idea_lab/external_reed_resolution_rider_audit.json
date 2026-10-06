@@ -1,0 +1,88 @@
+{
+  "source_repo": "https://github.com/reedjacobp/kalshi-trading-bot",
+  "pinned_commit": "217355f3babe0f6a764a360f9b759dbb7bd38594",
+  "commit_date": "2026-04-23T11:24:06-07:00",
+  "source_claim_present": true,
+  "source_ships_claim_supporting_ledger": false,
+  "optimization_doc_tick_period": true,
+  "optimizer_zero_slippage_default": true,
+  "optimizer_taker_profit_direct_fee_call": false,
+  "all_15m_cells_safe_total_negative": true,
+  "positive_15m_cv_val_profit_cells": [
+    "btc_15m"
+  ],
+  "positive_15m_cv_safe_total_cells": [],
+  "cells": {
+    "bnb_15m": {
+      "cv_total_val_trades": 36,
+      "cv_val_losses": 2,
+      "cv_val_profit": -3.0,
+      "cv_safe_total": -54.85,
+      "cv_safe_ppt": -1.5235,
+      "training_trades": 108,
+      "training_profit": -34.9,
+      "max_entry_price": 96
+    },
+    "btc_15m": {
+      "cv_total_val_trades": 175,
+      "cv_val_losses": 6,
+      "cv_val_profit": 28.3,
+      "cv_safe_total": -19.85,
+      "cv_safe_ppt": -0.1134,
+      "training_trades": 8,
+      "training_profit": 4.2,
+      "max_entry_price": 96
+    },
+    "doge_15m": {
+      "cv_total_val_trades": 48,
+      "cv_val_losses": 10,
+      "cv_val_profit": -77.9,
+      "cv_safe_total": -180.44,
+      "cv_safe_ppt": -3.7591,
+      "training_trades": 142,
+      "training_profit": -19.0,
+      "max_entry_price": 96
+    },
+    "eth_15m": {
+      "cv_total_val_trades": 54,
+      "cv_val_losses": 7,
+      "cv_val_profit": -43.7,
+      "cv_safe_total": -137.19,
+      "cv_safe_ppt": -2.5406,
+      "training_trades": 122,
+      "training_profit": 60.4,
+      "max_entry_price": 96
+    },
+    "hype_15m": {
+      "cv_total_val_trades": 117,
+      "cv_val_losses": 26,
+      "cv_val_profit": -206.6,
+      "cv_safe_total": -346.52,
+      "cv_safe_ppt": -2.9617,
+      "training_trades": 263,
+      "training_profit": -74.2,
+      "max_entry_price": 96
+    },
+    "sol_15m": {
+      "cv_total_val_trades": 61,
+      "cv_val_losses": 16,
+      "cv_val_profit": -130.6,
+      "cv_safe_total": -285.58,
+      "cv_safe_ppt": -4.6817,
+      "training_trades": 194,
+      "training_profit": 26.4,
+      "max_entry_price": 96
+    },
+    "xrp_15m": {
+      "cv_total_val_trades": 47,
+      "cv_val_losses": 7,
+      "cv_val_profit": -48.2,
+      "cv_safe_total": -144.98,
+      "cv_safe_ppt": -3.0848,
+      "training_trades": 239,
+      "training_profit": 115.2,
+      "max_entry_price": 96
+    }
+  },
+  "interpretation": "The pinned public artifact does not substantiate profitable 15-minute deployment: every shipped 15m cell has negative cv_safe_total, and the optimizer defaults ZERO_SLIPPAGE to 1. The headline 18,316-trade/12-month claim has no shipped ledger."
+}

@@ -1,0 +1,11 @@
+{
+  "asset_hours": 0,
+  "evidence": "prospective direct-depth size-aware non-atomic REST paper",
+  "identical_top_snapshots": 6580,
+  "max_edge_by_asset_hour_c": {},
+  "paired_book_snapshots": 8250,
+  "preregistration": "PREREG_multiasset_tail_duplicate_live_20261006.md",
+  "signals": [],
+  "snapshots": 8502,
+  "valid_snapshots": 0
+}

@@ -1,0 +1,84 @@
+{
+  "aoi_paper_project": {
+    "after_fee_mean_c": -0.0392156862745098,
+    "after_fee_pnl_c": -2,
+    "after_fee_pnl_ex_largest_trade_c": -37,
+    "aoi_first_time": "2026-05-17T17:55:52.869314Z",
+    "aoi_last_time": "2026-05-17T21:53:56.066639Z",
+    "aoi_rows": 70535,
+    "book_state_changes": 650,
+    "current_band_after_fee_pnl_c": 21,
+    "entries_inside_current_10_90_band": 10,
+    "gross_pnl_c": 96,
+    "gross_positive_zero_negative": [
+      16,
+      19,
+      16
+    ],
+    "kalshi_aoi_max_s": 64602.341218,
+    "kalshi_aoi_median_s": 465.276567,
+    "kalshi_aoi_over_10s_share": 0.9982561848727582,
+    "kalshi_aoi_over_60s_share": 0.9409087686963918,
+    "kalshi_aoi_p90_s": 815.516986,
+    "largest_gross_trade_c": 38,
+    "largest_trade_entry_c": 7,
+    "methodology_flags": [
+      "paper entries assume immediate execution at displayed ask",
+      "paper exits assume immediate execution at displayed bid",
+      "paper ledger omits fees and ticker/market identifiers",
+      "Kalshi AoI uses market.updated_time rather than a book-message timestamp",
+      "missing asks fall back to bids, permitting non-executable synthetic prices"
+    ],
+    "modeled_round_trip_taker_fees_c": 98,
+    "paper_trades": 51,
+    "source_commit": "0b22c616aa46ce4af09c8d9cd5aa055f5377a695",
+    "unique_book_states": 189
+  },
+  "evidence_class": "external_retrospective_methodology_audit",
+  "ml_framework": {
+    "asset_ticker_overlap": 1,
+    "engineered_snapshot_rows": 9880,
+    "methodology_flags": [
+      "train.py splits snapshot rows after concatenating assets, not markets by time",
+      "the shipped test partition is XRP-only",
+      "hundreds of snapshots share each single settlement target",
+      "the sample spans only a handful of quarter-hour outcomes",
+      "the row-level sample count is not an independent-outcome sample size"
+    ],
+    "row_split_index": 7904,
+    "sample_columns": 67,
+    "sample_first_time": "2026-02-25T04:22:45.058+00:00",
+    "sample_last_time": "2026-02-25T05:45:07.882+00:00",
+    "sample_rows": 2470,
+    "source_commit": "eb129b4fe2fe9a05d8e9f5439e7a97a8e77ae550",
+    "test_asset_counts": {
+      "xrp": 1976
+    },
+    "test_unique_tickers": 5,
+    "ticker_counts": {
+      "btc": {
+        "largest_snapshots_per_ticker": 457,
+        "snapshots": 2470,
+        "unique": 7
+      },
+      "eth": {
+        "largest_snapshots_per_ticker": 456,
+        "snapshots": 2470,
+        "unique": 6
+      },
+      "sol": {
+        "largest_snapshots_per_ticker": 458,
+        "snapshots": 2470,
+        "unique": 6
+      },
+      "xrp": {
+        "largest_snapshots_per_ticker": 456,
+        "snapshots": 2470,
+        "unique": 6
+      }
+    },
+    "ticker_overlap": 1,
+    "train_unique_tickers": 21
+  },
+  "promotion_eligible": false
+}

@@ -1,0 +1,18 @@
+{
+  "preregistration": "PREREG_external_sentient_markov_live_20261006.md",
+  "records": 72,
+  "decisions": 61,
+  "signals": 0,
+  "settled_signals": 0,
+  "summary": {
+    "trades": 0,
+    "passes": false,
+    "mean_c": null,
+    "lo95_c": null,
+    "halves_c": [],
+    "extra_1c_stress_c": null,
+    "mean_ex_best_10pct_days_c": null,
+    "max_day_gross_positive_share": null,
+    "rows": []
+  }
+}

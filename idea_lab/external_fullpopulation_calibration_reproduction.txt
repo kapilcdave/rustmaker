@@ -1,0 +1,128 @@
+source repository: theruviparambil/kalshi-btc-15m
+source commit: ed3230f21b0cb2b66f5b870e94695c1fd1e3bdc2
+local reproduction date: 2026-10-06
+unit tests: 17 passed
+
+windows 6257   days 69   2026-06-27 -> 2026-09-03
+unconditional P(YES) = 0.5017  (+0.17pp)
+
+Share of the window already decided (mid outside 5-95c):
+ min left  quoted   live   live %
+       14    6257   6256   100.0%
+       10    6257   6201    99.1%
+        5    6256   4574    73.1%
+        3    6256   3006    48.0%
+        2    6256   2097    33.5%
+        1    6256   1089    17.4%
+
+==============================================================================
+TEST 1 - CALIBRATION SLOPE (fee-independent, drift-independent)
+slope 1.00 = market prices are correct. >1 = underreacts. <1 = overreacts.
+==============================================================================
+ min left      n    slope      SE              95% CI  intercept
+       10   6201    1.113   0.032      [1.050, 1.175]     +0.014
+        5   4574    1.024   0.028      [0.972, 1.083]     +0.065
+        3   3006    0.918   0.030      [0.862, 0.978]     +0.056
+        2   2097    0.909   0.040      [0.834, 0.992]     +0.041
+        1   1089    1.163   0.073      [1.028, 1.315]     +0.158
+
+==============================================================================
+TEST 2 - EXECUTABLE P&L, cents per contract, across fee assumptions
+live windows, buy at ask / sell at bid, day-clustered, wild bootstrap p
+==============================================================================
+
+  10 min left   n=6201
+       fee model      side    net c     SE       t        p
+            none  sell YES    -0.72   0.52   -1.38   0.1857
+            none   buy YES    -0.26   0.52   -0.50   0.6317
+      taker 0.07  sell YES    -2.09   0.52   -4.01   0.0010
+      taker 0.07   buy YES    -1.63   0.52   -3.14   0.0030
+      ceil to 1c  sell YES    -2.54   0.52   -4.86   0.0003
+      ceil to 1c   buy YES    -2.07   0.52   -3.98   0.0003
+
+  5 min left   n=4574
+       fee model      side    net c     SE       t        p
+            none  sell YES    -1.41   0.54   -2.64   0.0117
+            none   buy YES    +0.59   0.53   +1.10   0.2677
+      taker 0.07  sell YES    -2.51   0.54   -4.69   0.0003
+      taker 0.07   buy YES    -0.51   0.53   -0.96   0.3520
+      ceil to 1c  sell YES    -2.97   0.54   -5.54   0.0003
+      ceil to 1c   buy YES    -0.97   0.53   -1.81   0.0727
+
+  3 min left   n=3006
+       fee model      side    net c     SE       t        p
+            none  sell YES    -1.36   0.73   -1.86   0.0683
+            none   buy YES    +0.54   0.73   +0.74   0.4673
+      taker 0.07  sell YES    -2.43   0.73   -3.32   0.0020
+      taker 0.07   buy YES    -0.53   0.73   -0.73   0.4667
+      ceil to 1c  sell YES    -2.88   0.73   -3.93   0.0003
+      ceil to 1c   buy YES    -0.98   0.73   -1.35   0.1847
+
+  2 min left   n=2097
+       fee model      side    net c     SE       t        p
+            none  sell YES    -1.12   0.93   -1.20   0.2427
+            none   buy YES    +0.24   0.93   +0.25   0.7910
+      taker 0.07  sell YES    -2.20   0.93   -2.35   0.0207
+      taker 0.07   buy YES    -0.84   0.93   -0.90   0.3730
+      ceil to 1c  sell YES    -2.66   0.93   -2.84   0.0067
+      ceil to 1c   buy YES    -1.30   0.93   -1.40   0.1770
+
+  1 min left   n=1089
+       fee model      side    net c     SE       t        p
+            none  sell YES    -2.70   1.18   -2.29   0.0323
+            none   buy YES    +1.57   1.17   +1.33   0.1920
+      taker 0.07  sell YES    -3.78   1.18   -3.21   0.0023
+      taker 0.07   buy YES    +0.48   1.17   +0.41   0.6917
+      ceil to 1c  sell YES    -4.25   1.18   -3.61   0.0010
+      ceil to 1c   buy YES    +0.02   1.18   +0.01   0.9843
+
+==============================================================================
+TEST 3 - BRIER SCORE of market mid vs the naive 0.50 forecast
+==============================================================================
+ min left      n    market  always .5    skill
+       10   6201    0.1887     0.2500  +0.2450
+        5   4574    0.1554     0.2500  +0.3785
+        3   3006    0.1620     0.2500  +0.3521
+        2   2097    0.1633     0.2500  +0.3468
+        1   1089    0.1401     0.2500  +0.4395
+
+======================================================================
+CLAIM 1 - Asian settlement correction
+======================================================================
+  boundary check at tau=60: regime A -> 20.0s, regime B -> 20.0s   MATCH
+
+     tau  closed form sd  monte carlo sd   ratio
+     900         287.216         286.244   0.997
+     300         157.923         156.703   0.992
+     120          87.600          87.783   1.002
+      60          43.800          43.964   1.004
+      30          15.486          15.669   1.012
+
+  worked case: tau=30s, spot $50 above reference, observed avg = reference
+    naive point-sample :  82.4c
+    Asian-correct      :  94.7c
+    README claims 12.2c gap -> computed 12.2c  OK
+
+======================================================================
+CLAIM 2 - the apparent YES edge is unstable across sample periods
+======================================================================
+  Sell YES at bid, NO fees applied, day-clustered. If the apparent edge
+  were a property of the market it would hold in every slice.
+
+                   slice  min      n    raw c     SE      t
+   early   <= 2026-07-27    5   1983    -2.29   0.76  -3.03
+   early   <= 2026-07-27    2    902    -3.74   1.10  -3.41
+    middle  07-28..08-20    5   1617    -0.80   0.95  -0.85
+    middle  07-28..08-20    2    749    +0.87   1.58  +0.55
+   late    >= 2026-08-21    5    974    -0.64   1.14  -0.56
+   late    >= 2026-08-21    2    446    +0.83   2.26  +0.37
+
+  Unconditional P(YES) per slice (near-identical, so realized drift
+  does NOT account for the difference):
+     early   <= 2026-07-27  n= 2819  P(YES)=0.5041
+      middle  07-28..08-20  n= 2188  P(YES)=0.5027
+     late    >= 2026-08-21  n= 1250  P(YES)=0.4944
+
+  Significant in one slice, absent in the other two, with no mechanism
+  that survives the full sample. That is the signature of a spurious
+  finding, which is why the headline rests on the fee-independent tests.

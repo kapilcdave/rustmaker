@@ -1,0 +1,137 @@
+{
+  "source_repository": "vinilpolepalli/quantfirm",
+  "source_commit": "dc3257dbd58c93fd04caec324f84d29510ea1aa8",
+  "rule_commit": "364984643cc35a2a69bea44399a0d1fd95d697ec",
+  "input_sha256": "0173cdfa5d509f9f124d6fc339624d56563b7328a737537ee2d32b43153bf226",
+  "provenance": "external public ledger; code records adapter=live only after a production IOC response reports a qualifying fill",
+  "post_rule_settlement_cutoff": "2026-09-12T16:15:00Z",
+  "all_public_live_crypto": {
+    "btc": {
+      "fills": 272,
+      "contracts": 4400,
+      "pnl_dollars": 4.090999999999996,
+      "fees_dollars": 54.83300000000005,
+      "mean_c_per_contract": 0.09297727272727292,
+      "lo95_c_per_contract": -5.541286299785182,
+      "halves_c_per_contract": [
+        5.084340909090909,
+        -4.898386363636364
+      ],
+      "extra_1c_stress_c_per_contract": -0.907022727272727,
+      "mean_ex_best_10pct_days_c_per_contract": -3.2706572164948455,
+      "max_day_gross_positive_share": 0.3439896031645082,
+      "daily_pnl_dollars": {
+        "2026-09-12": -0.03709999999999525,
+        "2026-09-13": -2.7585999999999977,
+        "2026-09-14": 105.6122,
+        "2026-09-15": -49.774600000000014,
+        "2026-09-16": -48.95089999999999
+      },
+      "first_settlement": "2026-09-12T11:46:00Z",
+      "last_settlement": "2026-09-16T08:01:02Z",
+      "passes": false
+    },
+    "eth": {
+      "fills": 271,
+      "contracts": 4232,
+      "pnl_dollars": -165.64750000000004,
+      "fees_dollars": 52.29640000000003,
+      "mean_c_per_contract": -3.914165879017014,
+      "lo95_c_per_contract": -7.91741820160812,
+      "halves_c_per_contract": [
+        -2.0195510396975433,
+        -5.808780718336484
+      ],
+      "extra_1c_stress_c_per_contract": -4.914165879017014,
+      "mean_ex_best_10pct_days_c_per_contract": -5.9667839472237505,
+      "max_day_gross_positive_share": 0.3476417889099306,
+      "daily_pnl_dollars": {
+        "2026-09-12": 51.424099999999996,
+        "2026-09-13": -42.96640000000001,
+        "2026-09-14": -60.754300000000015,
+        "2026-09-15": -67.1318,
+        "2026-09-16": -46.219100000000005
+      },
+      "first_settlement": "2026-09-12T13:16:01Z",
+      "last_settlement": "2026-09-16T07:46:00Z",
+      "passes": false
+    }
+  },
+  "post_rule_75_92": {
+    "btc": {
+      "fills": 240,
+      "contracts": 3921,
+      "pnl_dollars": -53.6517,
+      "fees_dollars": 47.97570000000005,
+      "mean_c_per_contract": -1.3683167559296099,
+      "lo95_c_per_contract": -8.707891506114084,
+      "halves_c_per_contract": [
+        3.854005102040816,
+        -6.5879755226925045
+      ],
+      "extra_1c_stress_c_per_contract": -2.3683167559296097,
+      "mean_ex_best_10pct_days_c_per_contract": -6.093541358936485,
+      "max_day_gross_positive_share": 0.3605340637165327,
+      "daily_pnl_dollars": {
+        "2026-09-12": -41.0691,
+        "2026-09-13": -6.211,
+        "2026-09-14": 111.3614,
+        "2026-09-15": -62.61710000000002,
+        "2026-09-16": -55.115899999999996
+      },
+      "first_settlement": "2026-09-12T16:16:00Z",
+      "last_settlement": "2026-09-16T08:01:02Z",
+      "passes": false
+    },
+    "eth": {
+      "fills": 245,
+      "contracts": 3811,
+      "pnl_dollars": -167.046,
+      "fees_dollars": 46.10490000000003,
+      "mean_c_per_contract": -4.383258987142482,
+      "lo95_c_per_contract": -8.209587348838651,
+      "halves_c_per_contract": [
+        -3.7510813648293966,
+        -5.015104931794333
+      ],
+      "extra_1c_stress_c_per_contract": -5.383258987142482,
+      "mean_ex_best_10pct_days_c_per_contract": -6.007884167636787,
+      "max_day_gross_positive_share": 0.3837182485915877,
+      "daily_pnl_dollars": {
+        "2026-09-12": 39.3849,
+        "2026-09-13": -42.96640000000001,
+        "2026-09-14": -76.10570000000001,
+        "2026-09-15": -44.20470000000002,
+        "2026-09-16": -43.15409999999999
+      },
+      "first_settlement": "2026-09-12T16:16:00Z",
+      "last_settlement": "2026-09-16T07:31:01Z",
+      "passes": false
+    }
+  },
+  "post_rule_75_92_combined": {
+    "fills": 485,
+    "contracts": 7732,
+    "pnl_dollars": -220.6977000000001,
+    "fees_dollars": 94.08059999999999,
+    "mean_c_per_contract": -2.8543416968442834,
+    "lo95_c_per_contract": -6.207416430681813,
+    "halves_c_per_contract": [
+      0.16415933781686484,
+      -5.872842731505433
+    ],
+    "extra_1c_stress_c_per_contract": -3.8543416968442834,
+    "mean_ex_best_10pct_days_c_per_contract": -4.842099886492622,
+    "max_day_gross_positive_share": 0.3716215344563949,
+    "daily_pnl_dollars": {
+      "2026-09-12": -1.684199999999997,
+      "2026-09-13": -49.17739999999999,
+      "2026-09-14": 35.255699999999976,
+      "2026-09-15": -106.82180000000002,
+      "2026-09-16": -98.27000000000001
+    },
+    "first_settlement": "2026-09-12T16:16:00Z",
+    "last_settlement": "2026-09-16T08:01:02Z",
+    "passes": false
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "preregistration": "PREREG_resolution_rider_live_20261006.md",
+  "cutoff_ns": 1791298710663503000,
+  "evidence": "prospective sequential direct-orderbook paper",
+  "decisions": 25,
+  "complete_decisions": 17,
+  "operational_completion": 0.68,
+  "signals": 0,
+  "settled": 0,
+  "losses": 0,
+  "mean_c": null,
+  "one_cent_stressed_mean_c": null,
+  "halves_c": [
+    null,
+    null
+  ],
+  "signal_rows": [],
+  "passes_short_screen": false
+}

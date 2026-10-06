@@ -1,0 +1,123 @@
+{
+  "preregistration": "PREREG_bnb_passive_live_20261006.md",
+  "cutoff_ns": 1791296761000000000,
+  "signals": 5,
+  "settled_signals": 5,
+  "strict_through_fills": 5,
+  "fill_rate": 1.0,
+  "pnl_per_signal_c": -14.42,
+  "pnl_per_fill_c": -14.42,
+  "one_cent_stressed_per_signal_c": -15.42,
+  "rows": [
+    {
+      "asset": "BNB",
+      "ticker": "KXBNB15M-26OCT061100-00",
+      "t0": 1791297900,
+      "close_ts": 1791298800,
+      "decision_ts": 1791298023,
+      "ready_us": 1791298025689942,
+      "day": 20732,
+      "k": 2,
+      "side": "no",
+      "limit": 0.49,
+      "yes_boundary": 0.51,
+      "result": "yes",
+      "displayed_size": 26.0,
+      "fill": [
+        1791298027600257,
+        0.52,
+        6.0,
+        "yes"
+      ],
+      "pnl": -0.49
+    },
+    {
+      "asset": "BNB",
+      "ticker": "KXBNB15M-26OCT061145-45",
+      "t0": 1791300600,
+      "close_ts": 1791301500,
+      "decision_ts": 1791300783,
+      "ready_us": 1791300785580617,
+      "day": 20732,
+      "k": 3,
+      "side": "no",
+      "limit": 0.53,
+      "yes_boundary": 0.47,
+      "result": "no",
+      "displayed_size": 8.62,
+      "fill": [
+        1791300789334324,
+        0.54,
+        1.0,
+        "yes"
+      ],
+      "pnl": 0.47
+    },
+    {
+      "asset": "BNB",
+      "ticker": "KXBNB15M-26OCT061215-15",
+      "t0": 1791302400,
+      "close_ts": 1791303300,
+      "decision_ts": 1791302582,
+      "ready_us": 1791302584401431,
+      "day": 20732,
+      "k": 3,
+      "side": "no",
+      "limit": 0.35,
+      "yes_boundary": 0.65,
+      "result": "yes",
+      "displayed_size": 51.0,
+      "fill": [
+        1791302586597256,
+        0.71,
+        24.0,
+        "yes"
+      ],
+      "pnl": -0.35
+    },
+    {
+      "asset": "BNB",
+      "ticker": "KXBNB15M-26OCT061230-30",
+      "t0": 1791303300,
+      "close_ts": 1791304200,
+      "decision_ts": 1791303602,
+      "ready_us": 1791303604938654,
+      "day": 20732,
+      "k": 5,
+      "side": "no",
+      "limit": 0.26,
+      "yes_boundary": 0.74,
+      "result": "yes",
+      "displayed_size": 50.0,
+      "fill": [
+        1791303610754912,
+        0.77,
+        2.55,
+        "yes"
+      ],
+      "pnl": -0.26
+    },
+    {
+      "asset": "BNB",
+      "ticker": "KXBNB15M-26OCT061245-45",
+      "t0": 1791304200,
+      "close_ts": 1791305100,
+      "decision_ts": 1791304683,
+      "ready_us": 1791304685241545,
+      "day": 20732,
+      "k": 8,
+      "side": "yes",
+      "limit": 0.091,
+      "yes_boundary": 0.091,
+      "result": "no",
+      "displayed_size": 11.0,
+      "fill": [
+        1791304693746448,
+        0.088,
+        1.0,
+        "no"
+      ],
+      "pnl": -0.091
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+{
+  "base_largest_losing_day": -81.91384000000005,
+  "base_max_drawdown": 178.4593600000002,
+  "base_stressed_total": 35.25279999999991,
+  "combined_chronological_halves": [
+    7.031892000000001,
+    -3.460465454545465
+  ],
+  "combined_day_cluster_ci": [
+    -16.97350709523811,
+    17.90224242857139
+  ],
+  "combined_largest_losing_day": -81.91384000000005,
+  "combined_max_drawdown": 179.3893600000002,
+  "combined_stressed_pnl_per_day": 1.5358952380952329,
+  "combined_stressed_total": 32.25379999999989,
+  "complete_population": true,
+  "hedge_entries": 9,
+  "hedges": [
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP151730-30",
+      "contracts": 100,
+      "day": 20711,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1789506900,
+      "price": 0.001,
+      "side": "yes",
+      "stressed_pnl": -0.31,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 400.0,
+      "btc_ticker": "KXBTC15M-26SEP161900-00",
+      "contracts": 133,
+      "day": 20712,
+      "dominant_filled_contracts": 400.0,
+      "fee": 0.01,
+      "open_ts": 1789598700,
+      "price": 0.001,
+      "side": "yes",
+      "stressed_pnl": -0.40900000000000003,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP200115-15",
+      "contracts": 100,
+      "day": 20716,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.02,
+      "open_ts": 1789880400,
+      "price": 0.0020000000000000018,
+      "side": "no",
+      "stressed_pnl": -0.4200000000000002,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP221915-15",
+      "contracts": 100,
+      "day": 20718,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1790118000,
+      "price": 0.0010000000000000009,
+      "side": "no",
+      "stressed_pnl": -0.3100000000000001,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP210015-15",
+      "contracts": 100,
+      "day": 20717,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1789963200,
+      "price": 0.001,
+      "side": "yes",
+      "stressed_pnl": -0.31,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP292015-15",
+      "contracts": 100,
+      "day": 20726,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1790726400,
+      "price": 0.001,
+      "side": "yes",
+      "stressed_pnl": -0.31,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP291945-45",
+      "contracts": 100,
+      "day": 20725,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1790724600,
+      "price": 0.001,
+      "side": "yes",
+      "stressed_pnl": -0.31,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26OCT050145-45",
+      "contracts": 100,
+      "day": 20731,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1791178200,
+      "price": 0.0010000000000000009,
+      "side": "no",
+      "stressed_pnl": -0.3100000000000001,
+      "won": false
+    },
+    {
+      "alt_filled_contracts": 300.0,
+      "btc_ticker": "KXBTC15M-26SEP161345-45",
+      "contracts": 100,
+      "day": 20712,
+      "dominant_filled_contracts": 300.0,
+      "fee": 0.01,
+      "open_ts": 1789579800,
+      "price": 0.001,
+      "side": "yes",
+      "stressed_pnl": -0.31,
+      "won": false
+    }
+  ],
+  "passes_oos_overlay_gate": false,
+  "preregistration": "PREREG_subcent_btc_tail_hedge_20261006.md",
+  "winning_hedges": 0
+}

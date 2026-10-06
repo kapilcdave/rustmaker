@@ -1,0 +1,30 @@
+{
+  "source_repo": "https://github.com/kyleleedixon/kalshi",
+  "pinned_commit": "4bcd7b81c08a4560d9bd01dfbdaf896a2870253e",
+  "snapshot_generated_utc": "2026-10-06T16:30:00Z",
+  "strategy": {
+    "tag": "edge007_spread003_fresh2s_v1 + maker_v2 pooled",
+    "entry_gates": {
+      "post_fee_model_edge_min_c": 7,
+      "spread_max_c": 3,
+      "book_age_max_s": 2
+    },
+    "contracts": 576,
+    "settled_markets": 249,
+    "pnl_usd": -26.6,
+    "ev_per_contract_usd": -0.0462,
+    "backtest_ev_per_contract_usd": 0.065,
+    "precommitted_kill_threshold_contracts": 500,
+    "precommitted_required_ev_per_contract_usd": 0.02,
+    "verdict": "REFUTED"
+  },
+  "maker_test": {
+    "requested_contracts": 24,
+    "filled_contracts": 0,
+    "fill_rate": 0.0,
+    "verdict": "REFUTED"
+  },
+  "state_confirms_halted": true,
+  "state_confirms_no_active_slice_gates": true,
+  "interpretation": "A preregistered, fee-aware, fresh-book high-model-edge rule reversed from +6.5c/contract in backtest to -4.62c/contract over 576 live contracts; its maker variant filled 0/24."
+}

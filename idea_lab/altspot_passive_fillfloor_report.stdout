@@ -1,0 +1,267 @@
+{
+  "preregistration": "PREREG_altspot_passive_fillfloor_20261006.md",
+  "signals": 1280,
+  "fetched": 1280,
+  "truncated": 3,
+  "http_errors": {},
+  "scores": [
+    {
+      "n": 1277,
+      "mean": -0.00605794831636648,
+      "se": 0.008384609827542085,
+      "lo95": -0.022491783578348967,
+      "hi95": 0.010375886945616005,
+      "latency_s": 2,
+      "stress": 0.0,
+      "submissions": 1277,
+      "fills": 1153,
+      "fill_rate": 0.9028974158183242,
+      "pnl_per_fill": -0.006709453599306156,
+      "filled_wins": 273,
+      "filled_losses": 880,
+      "halves_submission_mean": [
+        -0.022332288401253914,
+        0.010190923317683887
+      ],
+      "mean_ex_best_10pct_days": -0.014999086757990866,
+      "largest_day_share_gross_positive": 0.29203254132231404,
+      "max_drawdown_dollars": 18.314999999999998,
+      "per_asset": {
+        "NEAR": {
+          "submissions": 323,
+          "mean": -0.01631269349845201,
+          "total": -5.268999999999998,
+          "gross_positive_share": 0.22114184350568303
+        },
+        "ZEC": {
+          "submissions": 384,
+          "mean": 0.004747395833333334,
+          "total": 1.8230000000000004,
+          "gross_positive_share": 0.31619144602851323
+        },
+        "HYPE": {
+          "submissions": 570,
+          "mean": -0.007526315789473689,
+          "total": -4.290000000000003,
+          "gross_positive_share": 0.4626667104658037
+        }
+      },
+      "pass": false
+    },
+    {
+      "n": 1277,
+      "mean": -0.01508692247454973,
+      "se": 0.008367915178007881,
+      "lo95": -0.031488036223445176,
+      "hi95": 0.0013141912743457173,
+      "latency_s": 2,
+      "stress": 0.01,
+      "submissions": 1277,
+      "fills": 1153,
+      "fill_rate": 0.9028974158183242,
+      "pnl_per_fill": -0.016709453599306187,
+      "filled_wins": 273,
+      "filled_losses": 880,
+      "halves_submission_mean": [
+        -0.031235109717868338,
+        0.001035993740219083
+      ],
+      "mean_ex_best_10pct_days": -0.024067579908675803,
+      "largest_day_share_gross_positive": 0.3556213582959212,
+      "max_drawdown_dollars": 27.709000000000024,
+      "per_asset": {
+        "NEAR": {
+          "submissions": 323,
+          "mean": -0.025136222910216718,
+          "total": -8.119,
+          "gross_positive_share": 0.2211069241115594
+        },
+        "ZEC": {
+          "submissions": 384,
+          "mean": -0.0045755208333333386,
+          "total": -1.757000000000002,
+          "gross_positive_share": 0.3162092462289213
+        },
+        "HYPE": {
+          "submissions": 570,
+          "mean": -0.016473684210526314,
+          "total": -9.389999999999999,
+          "gross_positive_share": 0.4626838296595194
+        }
+      },
+      "pass": false
+    },
+    {
+      "n": 1277,
+      "mean": -0.008712607674236487,
+      "se": 0.008441239988672512,
+      "lo95": -0.02525743805203461,
+      "hi95": 0.007832222703561636,
+      "latency_s": 5,
+      "stress": 0.0,
+      "submissions": 1277,
+      "fills": 1147,
+      "fill_rate": 0.8981989036805011,
+      "pnl_per_fill": -0.009700087183958126,
+      "filled_wins": 267,
+      "filled_losses": 880,
+      "halves_submission_mean": [
+        -0.02474608150470219,
+        0.007295774647887329
+      ],
+      "mean_ex_best_10pct_days": -0.017958105646630237,
+      "largest_day_share_gross_positive": 0.30951892150824606,
+      "max_drawdown_dollars": 21.01499999999997,
+      "per_asset": {
+        "NEAR": {
+          "submissions": 323,
+          "mean": -0.018913312693498448,
+          "total": -6.108999999999998,
+          "gross_positive_share": 0.22063794892392152
+        },
+        "ZEC": {
+          "submissions": 384,
+          "mean": 0.002143229166666672,
+          "total": 0.8230000000000022,
+          "gross_positive_share": 0.3165924735861476
+        },
+        "HYPE": {
+          "submissions": 570,
+          "mean": -0.01024561403508772,
+          "total": -5.84,
+          "gross_positive_share": 0.4627695774899309
+        }
+      },
+      "pass": false
+    },
+    {
+      "n": 1277,
+      "mean": -0.01769459671104151,
+      "se": 0.008423266801266748,
+      "lo95": -0.03420419964152434,
+      "hi95": -0.001184993780558686,
+      "latency_s": 5,
+      "stress": 0.01,
+      "submissions": 1277,
+      "fills": 1147,
+      "fill_rate": 0.8981989036805011,
+      "pnl_per_fill": -0.01970008718395818,
+      "filled_wins": 267,
+      "filled_losses": 880,
+      "halves_submission_mean": [
+        -0.03360188087774295,
+        -0.001812206572769962
+      ],
+      "mean_ex_best_10pct_days": -0.02691985428051002,
+      "largest_day_share_gross_positive": 0.38032485442844,
+      "max_drawdown_dollars": 30.359000000000023,
+      "per_asset": {
+        "NEAR": {
+          "submissions": 323,
+          "mean": -0.027705882352941177,
+          "total": -8.949,
+          "gross_positive_share": 0.22057624354444136
+        },
+        "ZEC": {
+          "submissions": 384,
+          "mean": -0.007101562500000005,
+          "total": -2.7270000000000016,
+          "gross_positive_share": 0.3166791247621635
+        },
+        "HYPE": {
+          "submissions": 570,
+          "mean": -0.019157894736842103,
+          "total": -10.919999999999998,
+          "gross_positive_share": 0.4627446316933951
+        }
+      },
+      "pass": false
+    },
+    {
+      "n": 1277,
+      "mean": -0.013066562255285824,
+      "se": 0.0077803524102629746,
+      "lo95": -0.028316052979401256,
+      "hi95": 0.002182928468829606,
+      "latency_s": 10,
+      "stress": 0.0,
+      "submissions": 1277,
+      "fills": 1137,
+      "fill_rate": 0.8903680501174628,
+      "pnl_per_fill": -0.01467546174142479,
+      "filled_wins": 257,
+      "filled_losses": 880,
+      "halves_submission_mean": [
+        -0.028492163009404384,
+        0.002334898278560254
+      ],
+      "mean_ex_best_10pct_days": -0.02187477148080439,
+      "largest_day_share_gross_positive": 0.30257650451120827,
+      "max_drawdown_dollars": 24.778999999999993,
+      "per_asset": {
+        "NEAR": {
+          "submissions": 323,
+          "mean": -0.0223188854489164,
+          "total": -7.208999999999998,
+          "gross_positive_share": 0.22136762961854217
+        },
+        "ZEC": {
+          "submissions": 384,
+          "mean": -0.0035859374999999936,
+          "total": -1.3769999999999976,
+          "gross_positive_share": 0.3140608628570771
+        },
+        "HYPE": {
+          "submissions": 570,
+          "mean": -0.014210526315789476,
+          "total": -8.100000000000001,
+          "gross_positive_share": 0.4645715075243807
+        }
+      },
+      "pass": false
+    },
+    {
+      "n": 1277,
+      "mean": -0.021970242756460458,
+      "se": 0.007778226121969362,
+      "lo95": -0.037215565955520405,
+      "hi95": -0.006724919557400509,
+      "latency_s": 10,
+      "stress": 0.01,
+      "submissions": 1277,
+      "fills": 1137,
+      "fill_rate": 0.8903680501174628,
+      "pnl_per_fill": -0.024675461741424837,
+      "filled_wins": 257,
+      "filled_losses": 880,
+      "halves_submission_mean": [
+        -0.03728526645768026,
+        -0.006679186228482012
+      ],
+      "mean_ex_best_10pct_days": -0.030759597806215733,
+      "largest_day_share_gross_positive": 0.34505371843170074,
+      "max_drawdown_dollars": 34.31900000000003,
+      "per_asset": {
+        "NEAR": {
+          "submissions": 323,
+          "mean": -0.031018575851393188,
+          "total": -10.019,
+          "gross_positive_share": 0.22136128836219987
+        },
+        "ZEC": {
+          "submissions": 384,
+          "mean": -0.012726562500000005,
+          "total": -4.887000000000002,
+          "gross_positive_share": 0.3141609985274524
+        },
+        "HYPE": {
+          "submissions": 570,
+          "mean": -0.023070175438596494,
+          "total": -13.150000000000002,
+          "gross_positive_share": 0.4644777131103478
+        }
+      },
+      "pass": false
+    }
+  ]
+}

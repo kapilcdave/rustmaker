@@ -1,0 +1,27 @@
+{
+  "descriptive_best_edge_per_hour": {
+    "hours": 56,
+    "max_c": -2.000000000000001,
+    "mean_c": -2.0000000000000013,
+    "over_1c_hours": 0,
+    "over_2c_hours": 0,
+    "p50_c": -2.000000000000001,
+    "p90_c": -2.000000000000001,
+    "p99_c": -2.000000000000001,
+    "positive_hours": 0
+  },
+  "evidence": "historical non-atomic one-minute candle-close upper bound",
+  "integrity": {
+    "hours": 765,
+    "hours_with_both_brackets": 757,
+    "hours_with_pairs": 757,
+    "identity_violations": [],
+    "matching_expiration_values": 757,
+    "matching_index_rules": 757,
+    "settlement_dominance_violations": [],
+    "utc_days": 34
+  },
+  "opportunities": 0,
+  "passes_historical_promotion_gate": false,
+  "preregistration": "PREREG_btc_hourly_tail_duplicate_20261006.md"
+}
