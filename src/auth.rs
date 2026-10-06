@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ring::{
     rand::SystemRandom,
-    signature::{RSA_PSS_SHA256, RsaKeyPair},
+    signature::{Ed25519KeyPair, RSA_PSS_SHA256, RsaKeyPair},
 };
 use rsa::{
     RsaPrivateKey,
@@ -14,9 +14,16 @@ use rsa::{
 
 /// RSA-PSS/SHA-256, salt = digest length, via ring (several times faster than the pure-Rust
 /// `rsa` crate, which is used only to parse PKCS#1 or PKCS#8 PEM).
+/// Kalshi verifies either key type (Ed25519 measured 2026-10-06): RSA-PSS signs the message with
+/// SHA-256 + PSS, Ed25519 signs the same `{ts}{METHOD}{path}` bytes raw (64-byte signature).
+enum Signer {
+    Rsa(RsaKeyPair),
+    Ed25519(Ed25519KeyPair),
+}
+
 pub struct Auth {
     key_id: String,
-    key: RsaKeyPair,
+    key: Signer,
     rng: SystemRandom,
 }
 
@@ -78,19 +85,28 @@ impl Auth {
     }
 
     fn new(key_id: String, pem: &str) -> Result<Self> {
+        if let Some(der) = ed25519_der(pem) {
+            let key = Ed25519KeyPair::from_pkcs8_maybe_unchecked(&der)
+                .map_err(|e| anyhow::anyhow!("ring rejected Ed25519 key: {e}"))?;
+            return Ok(Self { key_id, key: Signer::Ed25519(key), rng: SystemRandom::new() });
+        }
         let der = parse_private_key(pem)?.to_pkcs8_der().context("re-encode key")?;
         let key = RsaKeyPair::from_pkcs8(der.as_bytes())
             .map_err(|e| anyhow::anyhow!("ring rejected key: {e}"))?;
-        Ok(Self { key_id, key, rng: SystemRandom::new() })
+        Ok(Self { key_id, key: Signer::Rsa(key), rng: SystemRandom::new() })
     }
 
     /// Signs arbitrary bytes (REST/WS prehash, or a FIX logon prehash).
     pub fn sign(&self, message: &[u8]) -> String {
-        let mut sig = vec![0; self.key.public().modulus_len()];
-        self.key
-            .sign(&RSA_PSS_SHA256, &self.rng, message, &mut sig)
-            .expect("RSA-PSS signing cannot fail with a valid key and buffer");
-        STANDARD.encode(sig)
+        match &self.key {
+            Signer::Rsa(key) => {
+                let mut sig = vec![0; key.public().modulus_len()];
+                key.sign(&RSA_PSS_SHA256, &self.rng, message, &mut sig)
+                    .expect("RSA-PSS signing cannot fail with a valid key and buffer");
+                STANDARD.encode(sig)
+            }
+            Signer::Ed25519(key) => STANDARD.encode(key.sign(message).as_ref()),
+        }
     }
 
     pub fn key_id(&self) -> &str {
@@ -103,6 +119,14 @@ impl Auth {
         let message = format!("{timestamp}{}{clean_path}", method.to_ascii_uppercase());
         Headers { key_id: self.key_id.clone(), timestamp, signature: self.sign(message.as_bytes()) }
     }
+}
+
+/// PKCS#8 DER of an Ed25519 key, or None if the PEM is anything else (the RSA path then runs).
+/// Detected by the id-Ed25519 OID 1.3.101.112 (2b 65 70) inside the PKCS#8 wrapper.
+fn ed25519_der(pem: &str) -> Option<Vec<u8>> {
+    let body: String = pem.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("-----")).collect();
+    let der = STANDARD.decode(body).ok()?;
+    (der.len() < 128 && der.windows(3).any(|w| w == [0x2b, 0x65, 0x70])).then_some(der)
 }
 
 fn parse_private_key(pem: &str) -> Result<RsaPrivateKey> {
@@ -133,6 +157,23 @@ mod tests {
         signature::Verifier,
     };
     use sha2::Sha256;
+
+    #[test]
+    fn ed25519_pem_signs_and_verifies() {
+        use ring::signature::{ED25519, KeyPair, UnparsedPublicKey};
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            STANDARD.encode(pkcs8.as_ref())
+        );
+        let auth = Auth::new("kid".into(), &pem).unwrap();
+        assert!(matches!(auth.key, Signer::Ed25519(_)));
+        let msg = b"1790000000000GET/trade-api/v2/portfolio/balance";
+        let sig = STANDARD.decode(auth.sign(msg)).unwrap();
+        assert_eq!(sig.len(), 64);
+        let pubkey = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        UnparsedPublicKey::new(&ED25519, pubkey.public_key().as_ref()).verify(msg, &sig).unwrap();
+    }
 
     #[test]
     fn ring_signature_verifies_as_kalshi_pss() {
