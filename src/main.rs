@@ -209,6 +209,9 @@ async fn main() -> Result<()> {
                 amend: args.iter().any(|a| a == "--amend"),
                 amend_only: args.iter().any(|a| a == "--amend-only"),
                 pull_amend_ticks: num("--pull-amend-ticks", 3.0)? as i64,
+                // Backstop for the post-fill hold. The `fill` message normally releases it in
+                // ~0.14 ms; the old hard-coded 1.5 s cost 1,634 s of silence per run.
+                fill_hold_us: num("--fill-hold-ms", 1500.0)? as i64 * 1_000,
                 spot_bps: num("--spot-bps", 0.0)?,
                 // The default venue set is the four that give a true quote feed in one small
                 // frame (Kraken `bbo`, Binance.US `bookTicker`, OKX `bbo-tbt`, Gate
@@ -279,6 +282,9 @@ async fn main() -> Result<()> {
                 amend: !args.iter().any(|a| a == "--no-amend"),
                 amend_only: args.iter().any(|a| a == "--amend-only"),
                 pull_amend_ticks: num("--pull-amend-ticks", 3.0)? as i64,
+                // Backstop for the post-fill hold. The `fill` message normally releases it in
+                // ~0.14 ms; the old hard-coded 1.5 s cost 1,634 s of silence per run.
+                fill_hold_us: num("--fill-hold-ms", 1500.0)? as i64 * 1_000,
                 // Sports books have no spot underlying, so the whole spot layer stays off.
                 spot_bps: 0.0,
                 spot_venues: Vec::new(),

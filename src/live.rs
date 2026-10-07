@@ -83,6 +83,8 @@ pub struct LiveParams {
     /// Amend-only pull distance, in ticks away from the touch on our own side. The order stays
     /// alive and out of the way instead of being cancelled and reposted.
     pub pull_amend_ticks: i64,
+    /// Backstop only for the post hold after a fill; the `fill` message releases it (see `Mkt`).
+    pub fill_hold_us: i64,
     /// Pull the side a spot move of more than this many bps over `spot_window_us` runs into, on
     /// the spot tick itself. 0 = off.
     pub spot_bps: f64,
@@ -201,6 +203,26 @@ struct LiveOrder {
 
 /// Would a clip on this side push the round's summed YES position past the cap? A side that
 /// shrinks |sum| is never blocked, so a round over the cap can always work its way back.
+/// `user_order` says a fill happened and frees the order slot; the `fill` message carries
+/// `post_position_fp`, the position authority. Posting between the two can quote off a stale
+/// position, which is how NEAR reached +2 on 2026-09-25. Hold until the authority lands, with a
+/// timer only as the backstop for a `fill` that never arrives or fails to parse.
+fn announce_fill(mk: &mut Mkt, now: i64, backstop_us: i64) {
+    mk.fills_announced += 1;
+    if mk.fills_announced > mk.fills_seen {
+        mk.hold_until_us = now + backstop_us;
+    }
+}
+
+/// The authority landed. Release only when every announced fill has been accounted for, so a
+/// second fill arriving mid-hold cannot be released by the first one's message.
+fn observe_fill(mk: &mut Mkt) {
+    mk.fills_seen += 1;
+    if mk.fills_seen >= mk.fills_announced {
+        mk.hold_until_us = 0;
+    }
+}
+
 fn round_cap_blocks(round_net_fp: i64, is_bid: bool, clip_fp: i64, cap_fp: i64) -> bool {
     let after = round_net_fp + if is_bid { clip_fp } else { -clip_fp };
     after.abs() > cap_fp && after.abs() > round_net_fp.abs()
@@ -223,7 +245,18 @@ struct Mkt {
     /// No posting in this market until then: after any fill, until the venue's `fill` message
     /// (the position authority) has landed. The `user_order` "executed" message can arrive first,
     /// free the slot, and let a new order post on a stale position (NEAR reached +2, 2026-09-25).
+    /// ⚑ This is now a BACKSTOP, not the mechanism. Measured on run 12 (1,089 fills matched on
+    /// client_order_id): the `fill` message arrives BEFORE its `user_order` 14.9% of the time, and
+    /// when it is later it is p50 0.136 ms / p99 1.60 ms. The old flat 1.5 s timer was therefore
+    /// over-provisioned ~11,000x and cost 1,634 s of silence per run — during which 554 prints
+    /// landed at our just-filled price. Holding on the ANNOUNCED-vs-SEEN counters below instead
+    /// enforces the same invariant for 2.3 s total, recovering 99.86% of it.
     hold_until_us: i64,
+    /// Fills announced by `user_order` vs fills whose `fill` message has been applied. The two
+    /// channels race in both directions, so a counter pair is the only ordering-safe form: hold
+    /// while `fills_announced > fills_seen`.
+    fills_announced: u64,
+    fills_seen: u64,
     /// The venue's price grid, (start, end, step) in PRICE_SCALE units, from `price_ranges`.
     /// Crypto and GOLD/SILVER/WTI step 0.1c below 10c and above 90c; COPPER/NATGAS step 1c
     /// everywhere, so the wing tick must never be assumed.
@@ -811,6 +844,10 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                                 mk.entry_px = (px * 100.0).round() as i64;
                                 mk.entry_us = now;
                             }
+                            // The position authority has landed: release the post hold. Inside the
+                            // `Ok(post)` arm on purpose — if the position did not parse, nothing
+                            // authoritative arrived and the backstop timer must stand.
+                            observe_fill(mk);
                         }
                     }
                     continue;
@@ -826,7 +863,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                         let ticker = orders.get(&coid).map(|o| o.ticker.clone())
                             .or_else(|| m["ticker"].as_str().map(str::to_owned));
                         if let Some(mk) = ticker.and_then(|t| markets.get_mut(&t)) {
-                            mk.hold_until_us = now + 1_500_000;
+                            announce_fill(mk, now, p.fill_hold_us);
                         }
                     }
                     if st == "canceled" || st == "executed" {
@@ -1599,6 +1636,43 @@ mod tests {
         // Off the grid at either end.
         assert!(!amendable(&resting(), 0, clip));
         assert!(!amendable(&resting(), PRICE_SCALE, clip));
+    }
+
+    /// The post hold must end when the position authority lands, not on a timer — but it must
+    /// still hold when the authority has NOT landed. These are the four orderings the two WS
+    /// channels actually produce; the `fill`-first one is 14.9% of real fills.
+    #[test]
+    fn the_fill_message_releases_the_post_hold_in_either_arrival_order() {
+        let backstop = 1_500_000;
+        let held = |mk: &super::Mkt, now: i64| now < mk.hold_until_us;
+
+        // user_order first: held until the fill lands, then free.
+        let mut mk = super::Mkt::default();
+        super::announce_fill(&mut mk, 0, backstop);
+        assert!(held(&mk, 1_000), "must hold while the authority is outstanding");
+        super::observe_fill(&mut mk);
+        assert!(!held(&mk, 1_000), "the fill message must release the hold");
+
+        // fill first (14.9% of real fills): the later user_order must not re-hold.
+        let mut mk = super::Mkt::default();
+        super::observe_fill(&mut mk);
+        super::announce_fill(&mut mk, 0, backstop);
+        assert!(!held(&mk, 1_000), "an already-seen fill must not start a hold");
+
+        // Two fills announced, one message: still held. The second releases it.
+        let mut mk = super::Mkt::default();
+        super::announce_fill(&mut mk, 0, backstop);
+        super::announce_fill(&mut mk, 0, backstop);
+        super::observe_fill(&mut mk);
+        assert!(held(&mk, 1_000), "one message cannot release two announced fills");
+        super::observe_fill(&mut mk);
+        assert!(!held(&mk, 1_000));
+
+        // The backstop still bounds a fill message that never arrives.
+        let mut mk = super::Mkt::default();
+        super::announce_fill(&mut mk, 0, backstop);
+        assert!(held(&mk, backstop - 1));
+        assert!(!held(&mk, backstop));
     }
 
     #[test]
