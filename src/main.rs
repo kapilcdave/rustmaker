@@ -8,6 +8,7 @@
 
 mod auth;
 mod book;
+mod fastspot;
 mod latency;
 mod live;
 mod shadow;
@@ -100,11 +101,34 @@ async fn main() -> Result<()> {
             let minutes: u64 = flag("--minutes").map_or(Ok(120), |m| m.parse())?;
             spotprobe::run(out, minutes).await
         }
+        Some("altfeed") => {
+            // Market data only: time every public spot feed for every 15M asset from this box.
+            // No auth, no orders. Run this BEFORE wiring any venue into the engine.
+            let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/altfeed".into()));
+            let minutes: u64 = flag("--minutes").map_or(Ok(120), |m| m.parse())?;
+            let venues = flag("--venues")
+                .map_or_else(|| Ok(fastspot::ALL.to_vec()), |v| fastspot::parse_venues(&v))?;
+            let assets = flag("--assets")
+                .map_or_else(|| Ok(fastspot::ASSETS.to_vec()), |v| fastspot::parse_assets(&v))?;
+            anyhow::ensure!(!venues.is_empty() && !assets.is_empty(), "--venues/--assets cannot be empty");
+            fastspot::probe(out, minutes, venues, assets).await
+        }
+        Some("altfeed-venues") => fastspot::venues_table(&fastspot::ASSETS),
+        Some("altfeed-ping") => {
+            let n: usize = flag("--n").map_or(Ok(20), |v| v.parse())?;
+            let venues = flag("--venues")
+                .map_or_else(|| Ok(fastspot::ALL.to_vec()), |v| fastspot::parse_venues(&v))?;
+            fastspot::ping(&venues, n).await
+        }
         Some("probe") => {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
             let dump: usize = flag("--dump").map_or(Ok(0), |m| m.parse())?;
-            probe(out, minutes, dump).await
+            // Tape the settlement index alongside the book, on the same receipt clock. Without
+            // it the capture can say which feed moved first but not which feed moved first
+            // against the number the contract actually settles on.
+            let index = args.iter().any(|a| a == "--index");
+            probe(out, minutes, dump, index).await
         }
         Some("get") => {
             // Signed read-only GET of one path, e.g. `get /account/limits`.
@@ -183,7 +207,24 @@ async fn main() -> Result<()> {
                 book_residual: args.iter().any(|a| a == "--book-residual"),
                 open_cutoff_s: num("--open-cutoff-s", 120.0)? as i64,
                 amend: args.iter().any(|a| a == "--amend"),
+                amend_only: args.iter().any(|a| a == "--amend-only"),
+                pull_amend_ticks: num("--pull-amend-ticks", 3.0)? as i64,
                 spot_bps: num("--spot-bps", 0.0)?,
+                // The default venue set is the four that give a true quote feed in one small
+                // frame (Kraken `bbo`, Binance.US `bookTicker`, OKX `bbo-tbt`, Gate
+                // `book_ticker`) plus Coinbase Exchange `ticker`, which is the one the engine
+                // read alone until now. Re-pick this per asset from `altfeed_score.py`: the
+                // point of several venues is that the leader is not the same one everywhere.
+                spot_venues: flag("--spot-venues").map_or_else(
+                    || Ok(vec![
+                        fastspot::Venue::Kraken, fastspot::Venue::BinanceUs,
+                        fastspot::Venue::Okx, fastspot::Venue::Gate, fastspot::Venue::CbEx,
+                    ]),
+                    |v| fastspot::parse_venues(&v),
+                )?,
+                spot_min_venues: num("--spot-min-venues", 3.0)? as usize,
+                spot_max_age_us: (num("--spot-max-age-ms", 2_000.0)? * 1_000.0) as i64,
+                spot_window_us: (num("--spot-window-ms", 1_000.0)? * 1_000.0) as i64,
                 max_round_net_fp: (num("--max-round-net", 0.0)? * book::SIZE_SCALE as f64) as i64,
                 open_lo_c: num("--open-min-c", 0.0)?,
                 open_hi_c: num("--open-max-c", 100.0)?,
@@ -236,7 +277,14 @@ async fn main() -> Result<()> {
                 book_residual: false,
                 open_cutoff_s: 0,
                 amend: !args.iter().any(|a| a == "--no-amend"),
+                amend_only: args.iter().any(|a| a == "--amend-only"),
+                pull_amend_ticks: num("--pull-amend-ticks", 3.0)? as i64,
+                // Sports books have no spot underlying, so the whole spot layer stays off.
                 spot_bps: 0.0,
+                spot_venues: Vec::new(),
+                spot_min_venues: 0,
+                spot_max_age_us: 0,
+                spot_window_us: 0,
                 max_round_net_fp: 0,
                 open_lo_c: 0.0,
                 open_hi_c: 100.0,
@@ -596,14 +644,42 @@ fn series_of(ticker: &str) -> String {
     ticker.split('-').next().unwrap_or(ticker).to_owned()
 }
 
-async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
+/// The CF Benchmarks index each 15M series settles on, read verbatim out of `rules_primary`
+/// ("the simple average of the sixty seconds of CF Benchmarks' ETHUSDRTI before ...", checked
+/// 2026-10-07 against the live markets of all nine series). BTC's index is named `BRTI`, and
+/// every other asset's is `{ASSET}USD_RTI` in the WebSocket's `index_ids` vocabulary.
+fn index_ids(series: &[&str]) -> Vec<String> {
+    series
+        .iter()
+        .filter_map(|s| fastspot::asset_of_series(s))
+        .map(|a| if a == "BTC" { "BRTI".to_owned() } else { format!("{a}USD_RTI") })
+        .collect()
+}
+
+/// Subscribe the settlement index. One command per index id, deliberately: an id the venue does
+/// not know rejects its own command instead of taking the whole subscription down with it, and
+/// the reject is taped as a venue error rather than read as a quiet index.
+fn sub_index(id: u64, index_id: &str) -> String {
+    json!({
+        "id": id,
+        "cmd": "subscribe",
+        "params": {"channels": ["cfbenchmarks_value", "cfbenchmarks_value_5hz"], "index_ids": [index_id]}
+    })
+    .to_string()
+}
+
+async fn probe(out: PathBuf, minutes: u64, mut dump: usize, index: bool) -> Result<()> {
     fs::create_dir_all(&out)?;
     let auth = load_auth()?;
     let stamp = unix_ms();
     let tape_path = out.join(format!("tape_{stamp}.csv.gz"));
     let stats_path = out.join(format!("stats_{stamp}.jsonl"));
     let dump_path = out.join(format!("raw_{stamp}.jsonl"));
+    let index_path = out.join(format!("index_{stamp}.jsonl.gz"));
     eprintln!("tape {} | stats {}", tape_path.display(), stats_path.display());
+    if index {
+        eprintln!("index {} (settlement reference)", index_path.display());
+    }
 
     // Tape writer on its own OS thread: gzip must never sit in the receive path.
     let (tape_tx, tape_rx) = std_mpsc::sync_channel::<String>(200_000);
@@ -615,6 +691,21 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
         }
         gz.finish()?.flush()?;
         Ok(())
+    });
+    // The index frames go to their own sidecar **verbatim**. Their field names are not confirmed
+    // from a successful capture yet (the previous attempt 401'd on a dead key and wrote nothing,
+    // `OVERNIGHT_20261006_STATUS.md`), so this records the frame rather than a guess at a schema.
+    let (index_tx, index_rx) = std_mpsc::sync_channel::<String>(50_000);
+    let index_thread = index.then(|| {
+        std::thread::spawn(move || -> Result<()> {
+            let mut gz =
+                GzEncoder::new(BufWriter::new(File::create(&index_path)?), Compression::fast());
+            for line in index_rx {
+                gz.write_all(line.as_bytes())?;
+            }
+            gz.finish()?.flush()?;
+            Ok(())
+        })
     });
     let mut stats_file = BufWriter::new(File::create(&stats_path)?);
     let mut dump_file = BufWriter::new(File::create(&dump_path)?);
@@ -643,6 +734,12 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
         stats.count("ALL", "ws_connects");
         let mut next_id = 1u64;
         let mut seqs: HashMap<u64, u64> = HashMap::new();
+        if index {
+            for id in index_ids(&SERIES) {
+                ws.send(Message::Text(sub_index(next_id, &id).into())).await?;
+                next_id += 1;
+            }
+        }
         // Kalshi MERGES later subscribes into the first command's sids, so a closed market is
         // simply left to go quiet: unsubscribing its sid would unsubscribe every market.
         let open: Vec<String> = markets.keys().cloned().collect();
@@ -720,6 +817,15 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
                         break;
                     }
                 }
+            }
+            // The settlement index carries no `market_ticker`, so it has to be taped before the
+            // market lookup below drops it.
+            if kind.starts_with("cfbenchmarks") {
+                stats.count("ALL", &format!("msg.{kind}"));
+                // `text.trim()`: the venue's frames end with a newline, which put the closing
+                // brace of this record on its own line and made every row unparseable as JSONL.
+                let _ = index_tx.try_send(format!("{{\"recv_us\":{recv_unix_us},\"frame\":{}}}\n", text.trim()));
+                continue;
             }
             let m = &v["msg"];
             let Some(ticker) = m["market_ticker"].as_str() else { continue };
@@ -867,6 +973,10 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
     disc.abort();
     drop(tape_tx);
     tape_thread.join().map_err(|_| anyhow::anyhow!("tape thread panicked"))??;
+    drop(index_tx);
+    if let Some(t) = index_thread {
+        t.join().map_err(|_| anyhow::anyhow!("index thread panicked"))??;
+    }
     Ok(())
 }
 

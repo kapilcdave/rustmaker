@@ -73,9 +73,31 @@ pub struct LiveParams {
     /// Requote an untouched resting order with one amend (same order_id, measured 2026-09-26)
     /// instead of cancel + create.
     pub amend: bool,
-    /// Pull the side a Coinbase move of more than this many bps over 1 s runs into, on the spot
-    /// tick itself. 0 = off.
+    /// AMEND-ONLY: never cancel-and-repost when an amend can express the same intent, including
+    /// the spot pull. Measured on the az2 box 2026-10-06: amend -> in book **2.6-2.9 ms**,
+    /// create 2.7-3.0, cancel 4.79 — so a pull by amend is one round trip at the fastest of the
+    /// three, where cancel-then-repost is two. A cancel still happens where an amend cannot say
+    /// it: a partial fill (amend's `count` semantics there are unmeasured), a price outside the
+    /// grid, and every shutdown path. A risk control that cannot be expressed is not skipped.
+    pub amend_only: bool,
+    /// Amend-only pull distance, in ticks away from the touch on our own side. The order stays
+    /// alive and out of the way instead of being cancelled and reposted.
+    pub pull_amend_ticks: i64,
+    /// Pull the side a spot move of more than this many bps over `spot_window_us` runs into, on
+    /// the spot tick itself. 0 = off.
     pub spot_bps: f64,
+    /// Spot venues to read. Several, because one venue's `ticker` channel only fires on that
+    /// venue's own matches: on a thin altcoin Coinbase can hold a stale print for minutes while
+    /// the quote moves everywhere else. See `fastspot` and `altfeed_score.py`.
+    pub spot_venues: Vec<crate::fastspot::Venue>,
+    /// The move is the MEDIAN of the per-venue returns, and needs at least this many venues
+    /// fresh. Below it there is no signal rather than a one-venue signal: a two-venue median is
+    /// one venue plus a tiebreak.
+    pub spot_min_venues: usize,
+    /// A venue whose last quote is older than this does not vote.
+    pub spot_max_age_us: i64,
+    /// Return window the pull threshold is measured over.
+    pub spot_window_us: i64,
     /// Cap on the ROUND's directional bet: the summed YES position across every market closing
     /// at the same time (the crypto series move together, so it is one bet). A side that would
     /// push |sum| past this is not quoted; sides that shrink it always are. 0 = off. Replaying
@@ -335,6 +357,36 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
         anyhow::ensure!(p.penny_room == 0, "--book-residual cannot be combined with --penny-room");
         anyhow::ensure!(p.spot_bps == 0.0, "--book-residual is the frozen book-only control; do not combine it with --spot-bps");
     }
+    // Refuse to start rather than run a spot gate that cannot fire: both of these are otherwise
+    // silent, and the engine would quote with a healthy-looking status line and no pull at all.
+    // Checked here, before any venue call, because a configuration error should not need a
+    // working credential to surface.
+    let spot_assets: Vec<&'static str> =
+        p.series.iter().filter_map(|s| crate::fastspot::asset_of_series(s)).collect();
+    if p.spot_bps > 0.0 {
+        anyhow::ensure!(
+            !spot_assets.is_empty(),
+            "--spot-bps is set but no --series is a crypto 15M series, so the pull would never fire"
+        );
+        anyhow::ensure!(
+            p.spot_venues.len() >= p.spot_min_venues.max(1),
+            "--spot-min-venues {} cannot be met by {} venue(s): the pull would be permanently inert",
+            p.spot_min_venues,
+            p.spot_venues.len()
+        );
+        anyhow::ensure!(
+            p.spot_window_us > 0 && p.spot_max_age_us >= p.spot_window_us,
+            "--spot-max-age-ms ({}) must be at least --spot-window-ms ({}), or no venue can hold \
+             an observation old enough to span the window and the pull is permanently inert",
+            p.spot_max_age_us / 1_000,
+            p.spot_window_us / 1_000
+        );
+    }
+    anyhow::ensure!(
+        p.pull_amend_ticks > 0 || !p.amend_only,
+        "--amend-only with --pull-amend-ticks 0 would amend a pulled quote to its own price, \
+         which is a pull that does nothing"
+    );
     fs::create_dir_all(&p.out)?;
     let auth = Arc::new(auth);
     let http = client()?;
@@ -373,9 +425,24 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
     j.row("order_group", group.clone());
 
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Done>();
-    let (spot_tx, mut spot_rx) = mpsc::channel::<crate::shadow::SpotTick>(65_536);
-    let spot_task = (p.spot_bps > 0.0).then(|| tokio::spawn(crate::shadow::spot_feed(spot_tx, p.series.clone())));
-    let mut spot: HashMap<String, VecDeque<(i64, f64)>> = HashMap::new();
+    let (spot_tx, mut spot_rx) = mpsc::channel::<crate::fastspot::Event>(65_536);
+    if p.spot_bps > 0.0 {
+        eprintln!(
+            "spot: {} venues x {} assets, pull at {:.1} bps / {} ms, median of >= {} fresh venues",
+            p.spot_venues.len(), spot_assets.len(), p.spot_bps,
+            p.spot_window_us / 1_000, p.spot_min_venues
+        );
+    }
+    let (spot_tasks, spot_dropped) = if p.spot_bps > 0.0 {
+        crate::fastspot::feed(&p.spot_venues, &spot_assets, spot_tx)
+    } else {
+        (Vec::new(), std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+    };
+    let mut spot = crate::fastspot::Consolidated::default();
+    // asset -> the series ticker prefix its markets carry, so a pull on "ETH" can find them.
+    let asset_series: HashMap<&'static str, String> = p.series.iter()
+        .filter_map(|s| crate::fastspot::asset_of_series(s).map(|a| (a, s.clone())))
+        .collect();
     let mut spot_pulls = 0u64;
     let mut amends = 0u64;
     let mut orders: HashMap<String, LiveOrder> = HashMap::new();
@@ -589,28 +656,70 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     continue;
                 }
                 sp = spot_rx.recv(), if p.spot_bps > 0.0 => {
-                    let Some(sp) = sp else { continue };
-                    j.row("X", json!([sp.series, sp.recv_us, sp.mid, sp.exch_ms]));
-                    let h = spot.entry(sp.series.clone()).or_default();
-                    h.push_back((sp.recv_us, sp.mid));
-                    while h.front().is_some_and(|(t, _)| *t < sp.recv_us - 10_000_000) { h.pop_front(); }
-                    let Some(r) = crate::shadow::spot_ret_bps(h, sp.recv_us, 1_000_000) else { continue };
+                    let Some(ev) = sp else { continue };
+                    // A venue dropping out silently shrinks the median the pull votes on, so the
+                    // lifecycle note is journalled even though the quotes are not: one row per
+                    // quote across 10 venues would be ~100x the journal for no forensic gain.
+                    if let crate::fastspot::Event::Note(v, what, detail) = &ev {
+                        eprintln!("spot {} {what}: {detail}", v.name());
+                        j.row("spot_note", json!({"venue": v.name(), "what": what, "detail": detail}));
+                    }
+                    spot.apply(&ev);
+                    let crate::fastspot::Event::Q(q) = ev else { continue };
+                    let Some(r) = spot.ret_bps(
+                        q.asset, q.recv_us, p.spot_window_us, p.spot_max_age_us, p.spot_min_venues,
+                    ) else { continue };
                     if r.abs() <= p.spot_bps { continue; }
-                    // Spot up = YES worth more: our ask is stale. Pull it now, not at the next
-                    // Kalshi message (the Kalshi book is what lags).
+                    // Spot up = YES worth more: our ask is stale. Act on the spot tick itself,
+                    // not at the next Kalshi message — the Kalshi book is what lags.
                     let side = if r > 0.0 { ASK } else { BID };
-                    let prefix = format!("{}-", sp.series);
-                    let victims: Vec<String> = markets.iter()
+                    let Some(series) = asset_series.get(q.asset) else { continue };
+                    let prefix = format!("{series}-");
+                    // `(coid, where it parks)`. The park price is read here, while the market's
+                    // grid is in hand, because the wings step 0.1c and the middle 1c — and it is
+                    // measured from the OTHERS' touch, never from our own price: measuring it
+                    // from our own price would walk the quote another N ticks on every tick of a
+                    // sustained move, at 10 tokens each, and never reach a stable place.
+                    let victims: Vec<(String, i64)> = markets.iter()
                         .filter(|(t, _)| t.starts_with(&prefix))
-                        .filter_map(|(_, m)| m.slots[side].clone())
-                        .filter(|c| orders.get(c).is_some_and(|o| o.st != St::PendingCancel))
+                        .filter_map(|(_, m)| {
+                            let c = m.slots[side].clone()?;
+                            let o = orders.get(&c)?;
+                            if o.st == St::PendingCancel { return None }
+                            let touch_c = if side == BID { m.last_bid } else { m.last_ask };
+                            let touch = (touch_c * 100.0).round() as i64;
+                            // No touch seen in this market yet: an amend has nothing to aim at,
+                            // and 0 makes `request_amend` refuse so the cancel below still pulls.
+                            if touch <= 0 { return Some((c, 0)) }
+                            let park = pull_price(&m.ranges, side, touch, p.pull_amend_ticks);
+                            let clear = if side == BID { o.price <= park } else { o.price >= park };
+                            if clear { return None }
+                            Some((c, park))
+                        })
                         .collect();
-                    for c in victims {
-                        if tokens < 2.0 { break; }
-                        tokens -= 2.0;
+                    if victims.is_empty() { continue; }
+                    let venues = spot.venue_rets_bps(q.asset, q.recv_us, p.spot_window_us, p.spot_max_age_us);
+                    for (c, park) in victims {
+                        // An amend reaches the book in 2.6-2.9 ms against a cancel's 4.79, and
+                        // leaves the quote alive N ticks out of the way rather than gone. Where
+                        // the amend cannot express it — a partial fill, no id yet, a price off the
+                        // grid, or not enough tokens for the dearer verb — cancel. The pull
+                        // always happens; only the verb is negotiable.
+                        let how = if p.amend_only && tokens >= 10.0
+                            && request_amend(&http, &auth, &done_tx, &mut orders, &c, park, p.clip_fp, &mut amends)
+                        {
+                            tokens -= 10.0;
+                            "amend"
+                        } else {
+                            if tokens < 2.0 { break; }
+                            tokens -= 2.0;
+                            request_cancel(&http, &auth, &done_tx, &mut orders, &c, p.exchange_index, &mut cancels);
+                            "cancel"
+                        };
                         spot_pulls += 1;
-                        j.row("spot_pull", json!({"coid": c, "r_bps": r}));
-                        request_cancel(&http, &auth, &done_tx, &mut orders, &c, p.exchange_index, &mut cancels);
+                        j.row("spot_pull", json!({"coid": c, "r_bps": r, "asset": q.asset,
+                            "how": how, "park": park,
+                            "venues": venues.iter().map(|(v, x)| json!([v.name(), x])).collect::<Vec<_>>()}));
                     }
                     continue;
                 }
@@ -623,6 +732,26 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     j.row("equity", json!({"session_mtm_c": session, "cumulative_c": cumulative, "venue_cash_plus_net_exposure_c": venue}));
                     eprintln!("[{}s] session {:+.2}c cumulative {:+.2}c (venue cash+net exposure {:.2}c) | posts={} cancels={} amends={} spot_pulls={} rejects={} fills={} group_trips={} undercuts={} resting={}",
                         started.elapsed().as_secs(), session, cumulative, venue.unwrap_or(f64::NAN), posts, cancels, amends, spot_pulls, rejects, fills, group_trips, undercuts, orders.len());
+                    if p.spot_bps > 0.0 {
+                        // The pull votes a median over FRESH venues, so the count of fresh venues
+                        // per asset is the gate's real state: fall below --spot-min-venues and
+                        // the pull is inert while every other line still looks healthy.
+                        let now = unix_us();
+                        let health: Vec<String> = spot_assets.iter()
+                            .map(|a| format!("{a}:{}", spot.fresh_venues(a, now, p.spot_max_age_us)))
+                            .collect();
+                        // The level we believed, per asset, alongside the venue count that
+                        // produced it: without it a pull row says the move but not the price it
+                        // was a move from.
+                        let mids: serde_json::Map<String, Value> = spot_assets.iter()
+                            .filter_map(|a| spot.usd_mid(a, now, p.spot_max_age_us).map(|m| ((*a).to_owned(), json!(m))))
+                            .collect();
+                        let lost = spot_dropped.load(std::sync::atomic::Ordering::Relaxed);
+                        eprintln!("        spot: fresh venues {} (min {}) | dropped {lost} | notes {}",
+                            health.join(" "), p.spot_min_venues, spot.notes);
+                        j.row("spot_health", json!({"fresh": health, "usd_mid": mids,
+                            "dropped": lost, "notes": spot.notes}));
+                    }
                     if p.sports.is_some() {
                         let open_pos: f64 = markets.values().map(|m| m.pos_fp.abs() as f64).sum::<f64>() / SIZE_SCALE as f64;
                         eprintln!("        sports: markets={} quotable={} games_with_parent_seen={} game_pauses={} jump_pauses={} open_abs_pos_ct={:.0} round_trips={} rt_pnl={:+.1}c",
@@ -908,7 +1037,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 if toxic { want = false; }
                 if want && p.spot_bps > 0.0 {
                     let series = ticker.split('-').next().unwrap_or("");
-                    if let Some(r) = spot.get(series).and_then(|h| crate::shadow::spot_ret_bps(h, now, 1_000_000)) {
+                    if let Some(r) = crate::fastspot::asset_of_series(series).and_then(|a| {
+                        spot.ret_bps(a, now, p.spot_window_us, p.spot_max_age_us, p.spot_min_venues)
+                    }) {
                         if (i == ASK && r > p.spot_bps) || (i == BID && r < -p.spot_bps) { want = false; }
                     }
                 }
@@ -950,22 +1081,19 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     // Untouched order, new price: one amend (keeps order_id) instead of two legs.
                     // A partly filled order is cancelled instead: amend's `count` semantics on a
                     // partial fill are unmeasured.
-                    Some(o) if want && p.amend && o.st == St::Resting && o.remaining_fp == p.clip_fp && o.order_id.is_some() => {
+                    Some(o) if want && (p.amend || p.amend_only) && o.st == St::Resting
+                        && o.remaining_fp == p.clip_fp && o.order_id.is_some() => {
                         if tokens < 10.0 { continue; }
-                        tokens -= 10.0;
-                        amends += 1;
-                        let (c, id) = (o.coid.clone(), o.order_id.clone().unwrap_or_default());
-                        let body = json!({"ticker": ticker, "side": if i == BID { "bid" } else { "ask" },
-                            "price": format!("{:.4}", target as f64 / PRICE_SCALE as f64),
-                            "count": format!("{:.2}", p.clip_fp as f64 / SIZE_SCALE as f64)});
-                        j.row("amend", json!({"coid": c, "body": body, "mid": mid}));
-                        if let Some(o) = orders.get_mut(&c) { o.st = St::PendingAmend; }
-                        let (http2, auth2, tx) = (http.clone(), auth.clone(), done_tx.clone());
-                        tokio::spawn(async move {
-                            let res = if dry() { Ok(json!({})) } else { signed(&http2, &auth2, "POST", &format!("/portfolio/events/orders/{id}/amend"), Some(&body)).await };
-                            let _ = tx.send(Done::Amended { coid: c, price: target, res });
-                        });
+                        let c = o.coid.clone();
+                        j.row("amend", json!({"coid": c, "price": target, "mid": mid}));
+                        if request_amend(&http, &auth, &done_tx, &mut orders, &c, target, p.clip_fp, &mut amends) {
+                            tokens -= 10.0;
+                        }
                     }
+                    // `want == false` is a gate refusing to quote here at all, so the order has to
+                    // GO. Amend-only does not apply: parking it a few ticks away would leave a
+                    // live quote that a cap, the close cutoff or the band just rejected. Amend
+                    // expresses "move this quote"; only cancel expresses "there is no quote".
                     Some(o) => {
                         if tokens < 2.0 { continue; }
                         tokens -= 2.0;
@@ -1020,7 +1148,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
     j.row("stop", json!({"reason": stop_reason, "game_pauses": game_pauses, "jump_pauses": jump_pauses, "posts": posts, "cancels": cancels, "rejects": rejects, "fills": fills, "group_trips": group_trips, "undercuts": undercuts, "local_cash_c": cash_c}));
     cancel_everything(&http, &auth, &mut j, p.exchange_index).await;
     if !dry() { let _ = signed(&http, &auth, "DELETE", &format!("/portfolio/order_groups/{group_id}"), None).await; }
-    if let Some(t) = spot_task { t.abort(); }
+    for t in &spot_tasks { t.abort(); }
     if let Some(t) = auto_task { t.abort(); }
     j.row("round_trips", json!({"n": round_trips, "pnl_c": rt_pnl_c}));
     let eq = equity_c(&http, &auth, p.exchange_index).await.unwrap_or(f64::NAN);
@@ -1205,6 +1333,49 @@ fn request_cancel(
     }
 }
 
+/// Move a resting order to `target` with one amend, keeping its `order_id`.
+///
+/// Returns `false` when an amend cannot express the move, and the caller MUST then fall back to a
+/// cancel: a partially filled order (amend's `count` semantics on a partial are unmeasured), an
+/// order with no id yet, or a price off the 1..PRICE_SCALE grid. The distinction matters because
+/// this is also the pull path, and a risk control that silently does nothing is the failure mode
+/// this repository has hit most often.
+/// Can one amend say "this order now rests at `target`"? Factored out so the refusal cases are
+/// testable without a credential or a socket, because they are the cases where a pull would
+/// silently not happen.
+fn amendable(o: &LiveOrder, target: i64, clip_fp: i64) -> bool {
+    o.st == St::Resting
+        && o.remaining_fp == clip_fp
+        && o.order_id.is_some()
+        && target > 0
+        && target < PRICE_SCALE
+}
+
+#[allow(clippy::too_many_arguments)]
+fn request_amend(
+    http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSender<Done>,
+    orders: &mut HashMap<String, LiveOrder>, coid: &str, target: i64, clip_fp: i64,
+    amends: &mut u64,
+) -> bool {
+    let Some(o) = orders.get_mut(coid) else { return false };
+    if !amendable(o, target, clip_fp) { return false }
+    let Some(id) = o.order_id.clone() else { return false };
+    if o.price == target { return true; }
+    let body = json!({"ticker": o.ticker, "side": if o.side == BID { "bid" } else { "ask" },
+        "price": format!("{:.4}", target as f64 / PRICE_SCALE as f64),
+        "count": format!("{:.2}", clip_fp as f64 / SIZE_SCALE as f64)});
+    o.st = St::PendingAmend;
+    *amends += 1;
+    let (http, auth, tx, coid) = (http.clone(), auth.clone(), tx.clone(), coid.to_owned());
+    tokio::spawn(async move {
+        let res = if dry() { Ok(json!({})) } else {
+            signed(&http, &auth, "POST", &format!("/portfolio/events/orders/{id}/amend"), Some(&body)).await
+        };
+        let _ = tx.send(Done::Amended { coid, price: target, res });
+    });
+    true
+}
+
 fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSender<Done>,
     coid: String, id: String, ticker: String, exchange_index: i64) {
     let (http, auth, tx) = (http.clone(), auth.clone(), tx.clone());
@@ -1299,6 +1470,21 @@ fn price_ranges(m: &Value) -> Vec<(i64, i64, i64)> {
 }
 
 /// Price step at `px` on this grid; 1c if the grid is unknown (coarser never invents a price).
+/// Where a pulled quote parks: `ticks` steps away from its own price on its own side — a bid
+/// steps DOWN, an ask steps UP — walking the venue's grid, whose step is 0.1c in the wings and
+/// 1c in the middle on crypto. A bid's step down is the grid's just below it, which is why the
+/// two sides read `tick_at` at different prices (1,649 `invalid_price` rejects on 2026-09-26
+/// came from getting exactly this backwards).
+fn pull_price(ranges: &[(i64, i64, i64)], side: usize, price: i64, ticks: i64) -> i64 {
+    let mut px = price;
+    for _ in 0..ticks.max(0) {
+        let next = if side == BID { px - tick_at(ranges, px - 1) } else { px + tick_at(ranges, px) };
+        if next <= 0 || next >= PRICE_SCALE { break }
+        px = next;
+    }
+    px
+}
+
 fn tick_at(ranges: &[(i64, i64, i64)], px: i64) -> i64 {
     ranges.iter().find(|(a, b, _)| *a <= px && px < *b)
         .or_else(|| ranges.last().filter(|(_, b, _)| px == *b))
@@ -1344,6 +1530,76 @@ pub async fn signed(http: &reqwest::Client, auth: &Auth, method: &str, path: &st
 mod tests {
     use super::{ASK, BID, Mkt};
     use serde_json::Value;
+
+    /// The amend-only park price. Crypto steps 0.1c below 10c and above 90c and 1c between, so a
+    /// fixed "3 ticks" is three DIFFERENT distances depending on where the quote sits, and the
+    /// two sides read the grid at different prices.
+    #[test]
+    fn a_pulled_quote_parks_ticks_away_on_its_own_side() {
+        // The crypto grid in PRICE_SCALE (1e4) units: 0.1c wings, 1c middle.
+        let g = vec![(0, 1_000, 10), (1_000, 9_000, 100), (9_000, 10_000, 10)];
+        // Mid-band: a bid steps down 1c a tick, an ask steps up 1c a tick.
+        assert_eq!(super::pull_price(&g, BID, 5_000, 3), 4_700);
+        assert_eq!(super::pull_price(&g, ASK, 5_000, 3), 5_300);
+        // Wing: the same three ticks are 0.3c, not 3c.
+        assert_eq!(super::pull_price(&g, BID, 500, 3), 470);
+        assert_eq!(super::pull_price(&g, ASK, 9_500, 3), 9_530);
+        // A bid's step DOWN is the grid just below it: at exactly 10c the step down is the 0.1c
+        // wing, not the 1c band the price itself sits in.
+        assert_eq!(super::pull_price(&g, BID, 1_000, 1), 990);
+        // An ask's step UP at 90c is the wing above it.
+        assert_eq!(super::pull_price(&g, ASK, 9_000, 1), 9_010);
+        // Never off the grid: a 1c bid cannot park below zero, and it stops rather than wrapping.
+        assert_eq!(super::pull_price(&g, BID, 20, 5), 10);
+        assert_eq!(super::pull_price(&g, ASK, 9_990, 5), 9_990);
+        // Zero ticks is a no-op, and a negative count cannot move the quote the wrong way.
+        assert_eq!(super::pull_price(&g, BID, 5_000, 0), 5_000);
+        assert_eq!(super::pull_price(&g, ASK, 5_000, -3), 5_000);
+    }
+
+    /// The park price is measured from the OTHERS' touch so that a sustained move cannot walk our
+    /// quote away a few ticks at a time, and so that a quote already clear of the touch is left
+    /// alone instead of amended on every spot tick.
+    #[test]
+    fn a_pull_is_idempotent_against_the_touch() {
+        let g = vec![(0, 1_000, 10), (1_000, 9_000, 100), (9_000, 10_000, 10)];
+        let (touch_bid, touch_ask) = (4_000, 4_200);
+        let park_bid = super::pull_price(&g, BID, touch_bid, 3);
+        let park_ask = super::pull_price(&g, ASK, touch_ask, 3);
+        assert_eq!((park_bid, park_ask), (3_700, 4_500));
+        // A bid resting AT the touch is not clear and must move.
+        assert!(!(touch_bid <= park_bid));
+        // Once parked it IS clear, so the next spot tick leaves it alone: no walk, no tokens.
+        assert!(park_bid <= park_bid);
+        assert!(super::pull_price(&g, BID, park_bid, 3) < park_bid, "re-parking from our own \
+            price would keep walking, which is why the touch is the reference");
+        // Mirror image on the ask.
+        assert!(!(touch_ask >= park_ask));
+        assert!(park_ask >= park_ask);
+    }
+
+    /// Amend-only must never become a pull that does not happen: every case `amendable` refuses
+    /// is a case the caller has to fall back to a cancel for.
+    #[test]
+    fn amend_refuses_what_it_cannot_express_so_the_pull_falls_back() {
+        use super::{LiveOrder, PRICE_SCALE, St, amendable};
+        let clip = 100;
+        let o = |st, remaining_fp, order_id| LiveOrder { coid: "c".into(), order_id,
+            ticker: "KXETH15M-x".into(), side: BID, price: 5_000, st, remaining_fp };
+        let resting = || o(St::Resting, clip, Some("oid".into()));
+        assert!(amendable(&resting(), 4_700, clip));
+        // A partly filled order: amend's `count` semantics on a partial are unmeasured.
+        assert!(!amendable(&o(St::Resting, clip / 2, Some("oid".into())), 4_700, clip));
+        // Not resting yet, so there is nothing at the venue to amend.
+        for st in [St::PendingNew, St::PendingCancel, St::PendingAmend] {
+            assert!(!amendable(&o(st, clip, Some("oid".into())), 4_700, clip), "{st:?}");
+        }
+        // Acked but unnamed: the order id IS the amend path.
+        assert!(!amendable(&o(St::Resting, clip, None), 4_700, clip));
+        // Off the grid at either end.
+        assert!(!amendable(&resting(), 0, clip));
+        assert!(!amendable(&resting(), PRICE_SCALE, clip));
+    }
 
     #[test]
     fn round_cap_blocks_only_the_side_that_grows_the_bet() {

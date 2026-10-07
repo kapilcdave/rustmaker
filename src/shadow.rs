@@ -797,10 +797,11 @@ fn through_fill(remaining: i64, observed_count: i64) -> i64 {
 
 /// Coinbase Exchange public `ticker` feed (no auth; market data only, no trading): one message
 /// per match with the best bid/ask after it. KXBTC15M → BTC-USD.
-pub async fn spot_feed(tx: mpsc::Sender<SpotTick>, series: Vec<String>) -> Result<()> {
-    spot_feed_impl(tx,series,false).await
-}
-
+/// The shadow's single-venue spot feed: Coinbase Exchange `ticker`, one socket, mid from the
+/// touch it carries. `live` used to share this and now reads [`crate::fastspot`] instead — a
+/// per-asset median across venues, because this channel only fires on a Coinbase match and a
+/// thin altcoin can hold a stale print here for minutes. Kept as-is so every shadow result
+/// already scored against it stays reproducible.
 async fn spot_feed_impl(tx: mpsc::Sender<SpotTick>, series: Vec<String>, strict:bool) -> Result<()> {
     let product = |s: &str| format!("{}-USD", s.trim_start_matches("KX").trim_end_matches("15M"));
     // Only the crypto 15M series have a Coinbase product; a mixed run (commodities, CRYPTOLEAD)
