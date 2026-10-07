@@ -55,8 +55,39 @@ A session authenticates **once at logon**, so FIX removes per-request HTTP frami
 per-request server-side auth that the table above prices at 2.4–5.3 ms. It is the only identified
 lever large enough to reach the ~7.5 ms competitor figure.
 
-**It is not available to us.** Logon with the correct pairing (port **8228**, TargetCompID
-**`KalshiNR`**) is rejected with:
+**⚠ CORRECTED 2026-10-07 — the gate is real but it is NOT the Premier/PrivateLink gate, and the
+first test used the wrong port.** Two errors in the original write-up below:
+
+1. *"Specific tier eligibility required for private connectivity (PrivateLink, VPC peering)"* was
+   quoted as though it gated FIX. It does not. Verbatim: *"Members on the **Premier** tier or above
+   can contact institutional@kalshi.com to provision a PrivateLink endpoint"* and *"Members on the
+   **Prime** tier or above can also contact institutional@kalshi.com to discuss VPC peering."*
+   Those gate **dedicated lines**, not FIX. **The docs state no tier requirement for FIX at all**,
+   so the rejection below is an *undocumented* gate.
+2. The documented port map is **8228 KalshiNR / 8230 KalshiRT / 8232 KalshiRFQ / 8233 KalshiMD**.
+   The first pass tried `KalshiRT` on 8228 and 8229 — both wrong — so `58=Invalid TargetCompID`
+   there was an artifact, not information.
+
+Retested on the correct matrix. The entitlement rejection **reproduces on two different session
+types across two different hosts**, so it is not a single-session fluke:
+
+| endpoint | result |
+| --- | --- |
+| `mm.fix:8228` `KalshiNR`, both IPs | `API usage level is not allowed for FIX` |
+| `marketdata.fix:8233` `KalshiMD` | `API usage level is not allowed for FIX` |
+| `mm.fix:8230` `KalshiRT`, both IPs | TCP/TLS **timeout** — port not open to us |
+
+**The self-service upgrade path does not help.** `POST /account/api_usage_level/upgrade` grants only
+a *"permanent **Advanced** API usage-level grant"* and we are already `usage_tier: advanced`
+(`source: manual`), so it is a no-op. Levels above Advanced are not self-service.
+
+**How to apply:** the ask is one line to institutional@kalshi.com — "raise our API usage level /
+enable FIX for key `2e88fe77`" — *not* an institutional onboarding for Premier. Quote the exact
+reject string, since the gate is undocumented. Re-test with the one-TLS-connection pre-flight
+before writing any engine code.
+
+Original (correct in substance, wrong on the port): logon with port **8228**, TargetCompID
+**`KalshiNR`** is rejected with:
 
 ```
 8=FIXT.1.1|9=129|35=5|34=1|49=KalshiNR|...|58=API usage level is not allowed for FIX
