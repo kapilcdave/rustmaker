@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Drain finished gate-probe tapes off the Ohio box every 6 h.
+     The box root filesystem has ~1.1 GB free and the collector writes ~23 MB/h, so without this the
+     supervisor's disk guard pauses collection after about 1.5 days. archive_box.sh copies, verifies
+     by sha256 and only then deletes the box copy, and it never touches a file modified in the last
+     10 minutes, so the hour currently being written is always left alone.
+     launchd rather than cron: cron silently skips jobs that fall while the lid is shut; launchd runs
+     a missed StartCalendarInterval on wake. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kapil.mm15gatearchive</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/kapil/proj/kalshi-mm15/runners/archive_box.sh</string>
+        <string>trading/kalshi-mm15/data/probe_gate</string>
+        <string>tape_*.csv.gz</string>
+    </array>
+
+    <!-- launchd starts jobs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin). ~/.ssh/config
+         reaches the box through `aws ssm start-session`, so without the AWS CLI on PATH every run
+         failed with "sh: aws: command not found" and archived 0 files for 24 h while the box filled
+         to 96%. An interactive shell has it and launchd does not: that difference is the bug. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/kapil/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kapil/proj/kalshi-mm15</string>
+
+    <!-- Every 2 h, not 6: the probe writes ~20 MB/h, so a 6-hourly drain removed ~120 MB per cycle
+         against ~120 MB written -- exactly break-even, leaving the whole buffer (219 MB over the
+         supervisor's MIN_FREE_MB=400 guard) as the only margin. An episodic writer took ~300 MB
+         between 01:10 and 04:10 on 2026-10-03, which that margin does not survive. A 2-hourly
+         drain holds the on-box high-water mark near 40 MB instead. -->
+    <key>StartInterval</key>
+    <integer>7200</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kapil/proj/kalshi-mm15/data/probe_gate_archive.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/kapil/proj/kalshi-mm15/data/probe_gate_archive.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

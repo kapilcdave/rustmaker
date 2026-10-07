@@ -1,0 +1,12 @@
+# dataset + controls (CPU, local)
+pandas
+pyarrow
+numpy
+scikit-learn
+# model (trainer VM and the sidecar)
+gliner2[local]
+protobuf          # DeBERTa-v3 tokenizer needs it; without it from_pretrained raises ImportError
+sentencepiece
+# sidecar
+fastapi
+uvicorn
