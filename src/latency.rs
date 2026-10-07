@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
     auth::Auth,
@@ -183,7 +183,7 @@ async fn feed(
     own: mpsc::UnboundedSender<OwnDelta>,
     ask: watch::Sender<Option<i64>>,
 ) -> Result<()> {
-    let (mut ws, _) = connect_async(req).await?;
+    let (mut ws, _) = crate::connect_ws(req).await?;
     ws.send(Message::Text(
         json!({"id": 1, "cmd": "subscribe", "params": {
             "channels": ["orderbook_delta"], "market_tickers": [ticker], "use_yes_price": true}})

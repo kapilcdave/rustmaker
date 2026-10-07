@@ -30,13 +30,19 @@ use flate2::{Compression, write::GzEncoder};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{sync::mpsc, time::interval};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
     auth::Auth,
     book::{Book, PRICE_SCALE, SIZE_SCALE, parse_value},
-    client, rest_base, rfc3339_us, signed_ws_request, unix_us,
+    client, rest_base, rfc3339_us, signed_ws_request,
+    stats::Samples,
+    unix_us,
 };
+
+/// Per-interval cap for the stage timers. Reset every housekeeping tick, so this only has to
+/// hold one interval's frames, not a whole session.
+const TIMING_CAP: usize = 50_000;
 
 pub struct LiveParams {
     pub series: Vec<String>,
@@ -57,6 +63,9 @@ pub struct LiveParams {
     /// 0 = join the touch (mid band). n > 0 = PENNY (PREREG_penny.md): one tick inside the
     /// OTHERS' touch, any band 1-99 c, only when their spread is at least n ticks.
     pub penny_room: i64,
+    /// Join one 15-minute crypto touch only when it remains favorable versus the receipt-clock
+    /// midpoint from one second ago. This is the book-only residual control.
+    pub book_residual: bool,
     /// No order that would OPEN or ADD to a position this close to the market's close; orders
     /// that reduce the position keep quoting until `stop_before_close_s`. 450 s cut live
     /// leftovers 126 → 15 ct over 197 markets (`leftover_rules.py`, 2026-09-25).
@@ -67,6 +76,17 @@ pub struct LiveParams {
     /// Pull the side a Coinbase move of more than this many bps over 1 s runs into, on the spot
     /// tick itself. 0 = off.
     pub spot_bps: f64,
+    /// Cap on the ROUND's directional bet: the summed YES position across every market closing
+    /// at the same time (the crypto series move together, so it is one bet). A side that would
+    /// push |sum| past this is not quoted; sides that shrink it always are. 0 = off. Replaying
+    /// all 11 live penny journals (`leftover_portfolio.py`, 2026-09-28) at 2 ct: +19 +/- 7 c/round
+    /// vs base, max drawdown $9.96 -> $3.6, robust to 5 s of fill-knowledge lag.
+    pub max_round_net_fp: i64,
+    /// Opening/adding orders only at a YES price in [open_lo_c, open_hi_c); orders that reduce the
+    /// position quote at any price. Wing fills (<10c, >90c) were 60% of 2,960 capped live fills
+    /// and settled at ~0 c/ct in both halves (2026-09-30), only adding variance. 0/100 = off.
+    pub open_lo_c: f64,
+    pub open_hi_c: f64,
     /// Sports mode: many markets per series, game-level pauses off the parent (full-game) books,
     /// per-game and total worst-case contract caps. None = the 15M crypto engine.
     pub sports: Option<SportsLive>,
@@ -116,6 +136,26 @@ fn dry() -> bool { DRY.load(std::sync::atomic::Ordering::Relaxed) }
 const BID: usize = 0;
 const ASK: usize = 1;
 
+fn book_residual_allows(side: usize, target_fp: i64, anchor_c: f64) -> bool {
+    if side == BID { anchor_c >= target_fp as f64 / 100.0 }
+    else { target_fp as f64 / 100.0 >= anchor_c }
+}
+
+fn opening_deadline_ok(remaining: Duration, cutoff_s: i64) -> bool {
+    cutoff_s <= 0 || remaining > Duration::from_secs(cutoff_s as u64)
+}
+
+fn open_band_ok(target_fp: i64, lo_c: f64, hi_c: f64) -> bool {
+    let c = target_fp as f64 / 100.0;
+    c >= lo_c && c < hi_c
+}
+
+fn nonnegative_pair_price(position_fp: i64, side: usize, target_fp: i64, entry_fp: i64) -> bool {
+    if position_fp > 0 && side == ASK { target_fp >= entry_fp }
+    else if position_fp < 0 && side == BID { target_fp <= entry_fp }
+    else { true }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum St {
     PendingNew,
@@ -137,11 +177,19 @@ struct LiveOrder {
     remaining_fp: i64,
 }
 
+/// Would a clip on this side push the round's summed YES position past the cap? A side that
+/// shrinks |sum| is never blocked, so a round over the cap can always work its way back.
+fn round_cap_blocks(round_net_fp: i64, is_bid: bool, clip_fp: i64, cap_fp: i64) -> bool {
+    let after = round_net_fp + if is_bid { clip_fp } else { -clip_fp };
+    after.abs() > cap_fp && after.abs() > round_net_fp.abs()
+}
+
 #[derive(Default)]
 struct Mkt {
     book: Option<Book>,
     close_unix_ms: i64,
     mids: VecDeque<(i64, f64)>,
+    receipt_mids: VecDeque<(i64, f64)>,
     pos_fp: i64,
     /// Our own fill ledger for this market, this run: contracts of YES and NO bought and the net
     /// cash flow (cents). Marked at `last_mid`, a YES+NO pair is worth 100 at any mid.
@@ -196,11 +244,17 @@ enum Done {
 /// Gzipped JSONL. A 3 h, 9-series run wrote 431 MB uncompressed (the box has ~3 GB free);
 /// gzip -1 made it 55 MB. `flush` is a gzip SYNC flush, so a crash loses at most one
 /// housekeeping interval and the file stays readable up to the last flush.
-struct Journal(BufWriter<GzEncoder<File>>);
+struct Journal(BufWriter<GzEncoder<File>>, Samples);
 
 impl Journal {
+    /// Timed, because this is a synchronous serde + gzip deflate running on the decide loop, and
+    /// `j.row("new", ..)` is the last statement before the `tokio::spawn` that POSTs an order.
+    /// If `journal_us` turns out to be material, move it to a writer thread the way `probe`
+    /// ("gzip must never sit in the receive path") and `shadow`'s Recorder already do.
     fn row(&mut self, kind: &str, v: Value) {
+        let t = Instant::now();
         let _ = writeln!(self.0, "{}", json!({"k": kind, "t": unix_us(), "v": v}));
+        self.1.push(t.elapsed().as_micros() as i64, 1.0);
     }
     fn flush(&mut self) {
         let _ = self.0.flush();
@@ -212,9 +266,74 @@ impl Journal {
     }
 }
 
+/// Stage timings for one WS frame, reset every housekeeping tick.
+///
+/// Until 2026-10-06 `live` took **no monotonic clock reading per message at all** — a single
+/// `unix_us()` wall-clock stamp and nothing after it — so every stage below was invisible and
+/// "where does the decision path spend its time" was unanswerable. The order round trip itself is
+/// already known (`rtt`/`latency` subcommands, and reconstructible offline from the journal's `new`
+/// -> `ack_new` rows); what was missing is everything *before* the send.
+///
+/// Pure instrumentation: nothing here changes a quoting decision.
+struct Timing {
+    /// Venue `ts` -> our receipt. The ONLY series here that compares two clocks, so it inherits
+    /// the chrony offset (RMS 8.4 us, root delay 330 us on 2026-10-06) plus the venue's own
+    /// unknown clock bias. Treat the shape and config-to-config deltas as real, the absolute
+    /// level as offset by an unknown constant.
+    feed_age_us: Samples,
+    /// `serde_json::from_str` on the frame.
+    parse_us: Samples,
+    /// The two O(markets) scans: `exposure_elsewhere` and `round_other`.
+    scan_us: Samples,
+    /// Delta handling: `apply_delta` + both `touch()` recomputes. INCLUDES the `own_delta`/`B`
+    /// journal rows written inside that block — subtract `journal_us` to split them.
+    book_us: Samples,
+    /// Receipt -> reaching the `---- decide ----` marker.
+    pre_decide_us: Samples,
+    /// Receipt -> the `tokio::spawn` that POSTs a new order. The end of everything we control.
+    to_spawn_us: Samples,
+}
+
+impl Timing {
+    fn new() -> Self {
+        Self {
+            feed_age_us: Samples::new(TIMING_CAP),
+            parse_us: Samples::new(TIMING_CAP),
+            scan_us: Samples::new(TIMING_CAP),
+            book_us: Samples::new(TIMING_CAP),
+            pre_decide_us: Samples::new(TIMING_CAP),
+            to_spawn_us: Samples::new(TIMING_CAP),
+        }
+    }
+
+    fn report(&self, journal_us: &Samples) -> Value {
+        json!({
+            "feed_age_us": self.feed_age_us.summary(&[]),
+            "parse_us": self.parse_us.summary(&[]),
+            "scan_us": self.scan_us.summary(&[]),
+            "book_us": self.book_us.summary(&[]),
+            "pre_decide_us": self.pre_decide_us.summary(&[]),
+            "to_spawn_us": self.to_spawn_us.summary(&[]),
+            "journal_us": journal_us.summary(&[]),
+        })
+    }
+
+    /// p50 of a series, for the one-line status print.
+    fn p50(s: &Samples) -> i64 {
+        s.summary(&[])["quantiles"]["p50"].as_i64().unwrap_or(0)
+    }
+}
+
 pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
     if p.clip_fp <= 0 || p.clip_fp > p.max_pos_fp {
         bail!("--clip must be > 0 and <= --max-pos (clip {} ct, max-pos {} ct)", p.clip_fp as f64 / SIZE_SCALE as f64, p.max_pos_fp as f64 / SIZE_SCALE as f64);
+    }
+    if p.book_residual {
+        anyhow::ensure!(p.sports.is_none(), "--book-residual is only available in crypto live mode");
+        anyhow::ensure!(p.series.len() == 1 && matches!(p.series[0].as_str(), "KXBTC15M" | "KXETH15M"),
+            "--book-residual requires one supported series: KXBTC15M or KXETH15M");
+        anyhow::ensure!(p.penny_room == 0, "--book-residual cannot be combined with --penny-room");
+        anyhow::ensure!(p.spot_bps == 0.0, "--book-residual is the frozen book-only control; do not combine it with --spot-bps");
     }
     fs::create_dir_all(&p.out)?;
     let auth = Arc::new(auth);
@@ -223,7 +342,8 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
     let mut j = Journal(BufWriter::new(GzEncoder::new(
         OpenOptions::new().create(true).append(true).open(p.out.join(format!("live_{stamp}.jsonl.gz")))?,
         Compression::fast(),
-    )));
+    )), Samples::new(TIMING_CAP));
+    let mut timing = Timing::new();
 
     // ---- equity baseline and the cumulative cap across restarts ----
     let equity0 = equity_c(&http, &auth, p.exchange_index).await?;
@@ -238,9 +358,12 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
     if equity0 < baseline - p.cumulative_max_loss_c {
         bail!("cumulative loss cap hit: equity {equity0:.2}c vs baseline {baseline:.2}c (cap {:.0}c); refusing to start", p.cumulative_max_loss_c);
     }
-    eprintln!("ARMED. equity {:.2}c, cumulative baseline {:.2}c, session cap {:.0}c, cumulative cap {:.0}c",
-        equity0, baseline, p.session_max_loss_c, p.cumulative_max_loss_c);
-    j.row("start", json!({"equity_c": equity0, "baseline_c": baseline, "series": p.series}));
+    eprintln!("ARMED. equity {:.2}c, cumulative baseline {:.2}c, session cap {:.0}c, cumulative cap {:.0}c, round net cap {}",
+        equity0, baseline, p.session_max_loss_c, p.cumulative_max_loss_c,
+        if p.max_round_net_fp > 0 { format!("{} ct", p.max_round_net_fp as f64 / SIZE_SCALE as f64) } else { "off".into() });
+    j.row("start", json!({"equity_c": equity0, "baseline_c": baseline, "series": p.series,
+        "book_residual": p.book_residual, "penny_room": p.penny_room, "spot_bps": p.spot_bps,
+        "max_round_net_fp": p.max_round_net_fp, "open_lo_c": p.open_lo_c, "open_hi_c": p.open_hi_c}));
 
     // ---- venue-side kill switch ----
     let group = if dry() { json!({"order_group_id": "dry-run"}) } else { signed(&http, &auth, "POST", "/portfolio/order_groups/create",
@@ -301,7 +424,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
         }
         parent_seen.clear();
         sync_positions(&http, &auth, &mut markets).await?;
-        let (mut ws, _) = match connect_async(signed_ws_request(&auth)?).await {
+        let (mut ws, _) = match crate::connect_ws(signed_ws_request(&auth)?).await {
             Ok(x) => x,
             Err(e) => { eprintln!("ws connect: {e}"); tokio::time::sleep(Duration::from_secs(1)).await; continue; }
         };
@@ -393,6 +516,17 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 }
                 _ = housekeeping.tick() => {
                     j.flush();
+                    // Stage timings for the interval just ended, then reset so the next report
+                    // describes the next interval rather than the first frames of the run.
+                    let stages = timing.report(&j.1);
+                    eprintln!("        stage us p50: feed_age={} parse={} scan={} book={} pre_decide={} to_spawn={} journal={}",
+                        Timing::p50(&timing.feed_age_us), Timing::p50(&timing.parse_us),
+                        Timing::p50(&timing.scan_us), Timing::p50(&timing.book_us),
+                        Timing::p50(&timing.pre_decide_us), Timing::p50(&timing.to_spawn_us),
+                        Timing::p50(&j.1));
+                    j.row("timing", stages);
+                    timing = Timing::new();
+                    j.1 = Samples::new(TIMING_CAP);
                     let now_ms = unix_us() / 1_000;
                     // Pull resting orders in markets inside the close buffer; drop closed markets.
                     let late: Vec<String> = orders.values()
@@ -509,7 +643,10 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 None => { eprintln!("ws closed"); break; }
             };
             let now = unix_us();
+            let t_recv = Instant::now();
+            let t_parse = Instant::now();
             let v: Value = match serde_json::from_str(&text) { Ok(v) => v, Err(_) => continue };
+            timing.parse_us.push(t_parse.elapsed().as_micros() as i64, 1.0);
             if let (Some(sid), Some(seq)) = (v["sid"].as_u64(), v["seq"].as_u64()) {
                 if let Some(prev) = seqs.insert(sid, seq) {
                     if seq != prev + 1 { eprintln!("seq gap sid {sid}"); break; }
@@ -582,6 +719,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 _ => {}
             }
             let Some(ticker) = m["market_ticker"].as_str() else { continue };
+            let t_scan = Instant::now();
             // Sports caps: worst-case contracts in every OTHER quoted market (this game, all games).
             let exposure_elsewhere = p.sports.as_ref().map(|_| {
                 let game = ticker.split('-').nth(1).unwrap_or("");
@@ -595,6 +733,13 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 }
                 (g, t)
             });
+            // Round cap: the summed position of every OTHER market closing with this one.
+            let round_other = (p.max_round_net_fp > 0).then(|| {
+                let close = markets.get(ticker).map_or(-1, |m| m.close_unix_ms);
+                markets.iter().filter(|(tk, om)| tk.as_str() != ticker && om.close_unix_ms == close)
+                    .map(|(_, om)| om.pos_fp).sum::<i64>()
+            });
+            timing.scan_us.push(t_scan.elapsed().as_micros() as i64, 1.0);
             let Some(mk) = markets.get_mut(ticker) else { continue };
             let vt = match kind {
                 "orderbook_snapshot" => {
@@ -603,6 +748,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     if let Some(t) = mk.book.as_ref().map(Book::touch) {
                         if let (Some(b), Some(a)) = (t.yes_bid_fp, t.yes_ask_fp) {
                             mk.last_mid = (b + a) as f64 / 200.0;
+                            if p.book_residual { mk.receipt_mids.push_back((now, mk.last_mid)); }
                         }
                     }
                     continue;
@@ -612,7 +758,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 _ => None,
             };
             let Some(vt) = vt else { continue };
+            timing.feed_age_us.push(now - vt, 1.0);
             let Some(book) = mk.book.as_mut() else { continue };
+            let t_book = Instant::now();
             if kind == "orderbook_delta" {
                 let previous_touch = book.touch();
                 let size_before = book.size_at(m["side"].as_str().unwrap_or(""),
@@ -641,6 +789,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
             } else {
                 j.row("T", json!([ticker, vt, m["taker_side"], m["yes_price_dollars"], m["count_fp"]]));
             }
+            timing.book_us.push(t_book.elapsed().as_micros() as i64, 1.0);
 
             // ---- sports: a parent book is a score feed, never quoted ----
             if let Some(cfg) = &p.sports {
@@ -658,6 +807,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 }
             }
             // ---- decide ----
+            timing.pre_decide_us.push(t_recv.elapsed().as_micros() as i64, 1.0);
             if group_tripped || now < mk.hold_until_us { continue; }
             tokens = (tokens + (now - last_refill) as f64 / 1e6 * 300.0).min(900.0);
             last_refill = now;
@@ -673,7 +823,18 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
             let mid = (bid + ask) as f64 / 200.0;
             mk.last_bid = bid as f64 / 100.0;
             mk.last_ask = ask as f64 / 100.0;
-            let mom = mk.mid_at(vt - 1_000_000).map(|m0| mid - m0).unwrap_or(0.0);
+            if p.book_residual {
+                if mk.receipt_mids.back().is_none_or(|(_, old)| *old != mid) {
+                    mk.receipt_mids.push_back((now, mid));
+                }
+                while mk.receipt_mids.len() > 2 && mk.receipt_mids[1].0 < now - 2_000_000 {
+                    mk.receipt_mids.pop_front();
+                }
+            }
+            let anchor = p.book_residual.then(|| mk.receipt_mids.iter().rev()
+                .find(|(seen, _)| *seen <= now - 1_000_000).map(|(_, value)| *value)).flatten();
+            let mom = if p.book_residual { anchor.map(|m0| mid - m0).unwrap_or(0.0) }
+                else { mk.mid_at(vt - 1_000_000).map(|m0| mid - m0).unwrap_or(0.0) };
             let tot = (bsz + asz).max(1) as f64;
             let open_ok = mk.close_unix_ms - now / 1_000 > p.stop_before_close_s * 1_000;
             let postable = mid >= p.mid_lo_c && mid <= p.mid_hi_c && open_ok;
@@ -729,6 +890,10 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 // A bid opens/adds unless we are short; an ask opens/adds unless we are long.
                 let opens = if i == BID { mk.pos_fp >= 0 } else { mk.pos_fp <= 0 };
                 if opens && mk.close_unix_ms - now / 1_000 <= p.open_cutoff_s * 1_000 { want = false; }
+                if round_other.is_some_and(|o| round_cap_blocks(o + mk.pos_fp, i == BID, p.clip_fp, p.max_round_net_fp)) {
+                    want = false;
+                }
+                if opens && !opening_deadline_ok(deadline.saturating_duration_since(Instant::now()), p.open_cutoff_s) { want = false; }
                 if let (Some(cfg), true) = (&p.sports, want && opens) {
                     // Worst case with THIS side resting: every other market of the game at its worst
                     // one-sided outcome, this one with side i at a full clip.
@@ -767,9 +932,16 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                         target = if i == ASK { target.max(bid + tick) } else { target.min(ask - tick) };
                     }
                 }
+                if p.book_residual {
+                    want &= anchor.is_some_and(|value| book_residual_allows(i, target, value));
+                    if exiting && mk.entry_px > 0 {
+                        want &= nonnegative_pair_price(mk.pos_fp, i, target, mk.entry_px);
+                    }
+                }
                 // Sports: our OWN price must sit in the band too (a 6c bid under a 30c ask has
                 // an in-band mid; the ledger's band was on the quote price).
                 if p.sports.is_some() && !exiting && ((target as f64) < p.mid_lo_c * 100.0 || (target as f64) > p.mid_hi_c * 100.0) { want = false; }
+                if opens && !open_band_ok(target, p.open_lo_c, p.open_hi_c) { want = false; }
                 if target <= 0 || target >= PRICE_SCALE { want = false; }
                 let cur = mk.slots[i].as_ref().and_then(|c| orders.get(c));
                 match cur {
@@ -811,11 +983,13 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                             "time_in_force": "good_till_canceled", "self_trade_prevention_type": "maker",
                             "post_only": true, "order_group_id": group_id, "exchange_index": p.exchange_index,
                         });
-                        j.row("new", json!({"coid": coid, "body": body, "mid": mid, "mom": mom, "bsz": bsz, "asz": asz}));
+                        j.row("new", json!({"coid": coid, "body": body, "mid": mid, "mom": mom,
+                            "anchor_c": anchor, "bsz": bsz, "asz": asz}));
                         orders.insert(coid.clone(), LiveOrder { coid: coid.clone(), order_id: None,
                             ticker: ticker.to_owned(), side: i, price: target, st: St::PendingNew, remaining_fp: p.clip_fp });
                         mk.slots[i] = Some(coid.clone());
                         let (http2, auth2, tx) = (http.clone(), auth.clone(), done_tx.clone());
+                        timing.to_spawn_us.push(t_recv.elapsed().as_micros() as i64, 1.0);
                         tokio::spawn(async move {
                             let res = if dry() { Ok(json!({"order_id": body["client_order_id"].clone()})) } else { signed(&http2, &auth2, "POST", "/portfolio/events/orders", Some(&body)).await };
                             let _ = tx.send(Done::Created { coid, res });
@@ -1046,7 +1220,7 @@ fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSe
 pub async fn cancel_all(auth: Auth, exchange_index: i64) -> Result<()> {
     let http = client()?;
     let tmp = std::env::temp_dir().join(format!("cancel_all_{}.jsonl.gz", unix_us()));
-    let mut j = Journal(BufWriter::new(GzEncoder::new(File::create(&tmp)?, Compression::fast())));
+    let mut j = Journal(BufWriter::new(GzEncoder::new(File::create(&tmp)?, Compression::fast())), Samples::new(TIMING_CAP));
     cancel_everything(&http, &auth, &mut j, exchange_index).await;
     j.finish();
     Ok(())
@@ -1100,6 +1274,7 @@ async fn equity_c(http: &reqwest::Client, auth: &Auth, exchange_index: i64) -> R
     let cash: f64 = shard.parse::<f64>()? * 100.0;
     let pos = signed(http, auth, "GET", "/portfolio/positions?count_filter=position&limit=200", None).await?;
     let exposure: f64 = pos["market_positions"].as_array().into_iter().flatten()
+        .filter(|m| m["exchange_index"].as_i64() == Some(exchange_index))
         .filter_map(|m| m["market_exposure_dollars"].as_str()?.parse::<f64>().ok()).sum::<f64>() * 100.0;
     Ok(cash + exposure)
 }
@@ -1167,8 +1342,23 @@ pub async fn signed(http: &reqwest::Client, auth: &Auth, method: &str, path: &st
 
 #[cfg(test)]
 mod tests {
-    use super::Mkt;
+    use super::{ASK, BID, Mkt};
     use serde_json::Value;
+
+    #[test]
+    fn round_cap_blocks_only_the_side_that_grows_the_bet() {
+        let (ct, cap) = (100, 200); // 1 ct clips, cap 2 ct (SIZE_SCALE 100)
+        // At +2 across the round: another YES would make +3, blocked; a sale shrinks it.
+        assert!(super::round_cap_blocks(200, true, ct, cap));
+        assert!(!super::round_cap_blocks(200, false, ct, cap));
+        // Up to the cap is allowed; mirror image for a short round.
+        assert!(!super::round_cap_blocks(100, true, ct, cap));
+        assert!(super::round_cap_blocks(-200, false, ct, cap));
+        assert!(!super::round_cap_blocks(-200, true, ct, cap));
+        // Already past the cap (fills landed together): only the shrinking side quotes.
+        assert!(super::round_cap_blocks(300, true, ct, cap));
+        assert!(!super::round_cap_blocks(300, false, ct, cap));
+    }
 
     #[test]
     fn tick_follows_the_venue_grid() {
@@ -1184,6 +1374,39 @@ mod tests {
         // An ask at 0.1000 improves by 0.1c (to 0.0990), a bid at 0.0990 by 0.1c (to 0.1000).
         assert_eq!(super::tick_at(&r, 1_000 - 1), 10);
         assert_eq!(super::tick_at(&r, 990), 10);
+    }
+
+    #[test]
+    fn book_residual_rejects_a_touch_that_crossed_the_old_mid() {
+        assert!(super::book_residual_allows(BID, 4_900, 50.0));
+        assert!(!super::book_residual_allows(BID, 5_100, 50.0));
+        assert!(super::book_residual_allows(ASK, 5_100, 50.0));
+        assert!(!super::book_residual_allows(ASK, 4_900, 50.0));
+    }
+
+    #[test]
+    fn open_band_keeps_the_wings_out() {
+        assert!(super::open_band_ok(1_000, 10.0, 90.0)); // 10.00c is in
+        assert!(!super::open_band_ok(990, 10.0, 90.0)); // 9.90c wing
+        assert!(super::open_band_ok(8_900, 10.0, 90.0));
+        assert!(!super::open_band_ok(9_000, 10.0, 90.0)); // 90.00c is out
+        assert!(super::open_band_ok(9_950, 0.0, 100.0)); // default: off
+        assert!(super::open_band_ok(10, 0.0, 100.0));
+    }
+
+    #[test]
+    fn opening_stops_before_the_experiment_deadline() {
+        assert!(super::opening_deadline_ok(std::time::Duration::from_secs(121), 120));
+        assert!(!super::opening_deadline_ok(std::time::Duration::from_secs(120), 120));
+        assert!(!super::opening_deadline_ok(std::time::Duration::from_secs(1), 120));
+    }
+
+    #[test]
+    fn book_residual_never_locks_a_negative_pair() {
+        assert!(super::nonnegative_pair_price(100, ASK, 5_100, 5_000));
+        assert!(!super::nonnegative_pair_price(100, ASK, 4_900, 5_000));
+        assert!(super::nonnegative_pair_price(-100, BID, 4_900, 5_000));
+        assert!(!super::nonnegative_pair_price(-100, BID, 5_100, 5_000));
     }
 
     #[test]

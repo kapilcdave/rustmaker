@@ -11,7 +11,9 @@ mod book;
 mod latency;
 mod live;
 mod shadow;
+mod residual;
 mod sports;
+mod spotprobe;
 mod stats;
 
 use std::{
@@ -92,6 +94,12 @@ async fn main() -> Result<()> {
                 series, sports_min_spread_c: Some(width), sports_tag: flag("--tag"), ..Default::default()
             }).await
         }
+        Some("spotprobe") => {
+            // Market data only: time every public BTC feed from this box (no auth, no orders).
+            let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/spotprobe".into()));
+            let minutes: u64 = flag("--minutes").map_or(Ok(120), |m| m.parse())?;
+            spotprobe::run(out, minutes).await
+        }
         Some("probe") => {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
@@ -119,6 +127,9 @@ async fn main() -> Result<()> {
             let out = PathBuf::from(flag("--out").unwrap_or_else(|| "data/shadow".into()));
             let minutes: u64 = flag("--minutes").map_or(Ok(60), |m| m.parse())?;
             let clip_ladder = args.iter().any(|a| a == "--clip-ladder");
+            let residual_ladder = args.iter().any(|a| a == "--residual-ladder");
+            anyhow::ensure!(!residual_ladder || (!clip_ladder && !args.iter().any(|a| a == "--only-base")),
+                "--residual-ladder cannot be combined with other arm selectors");
             anyhow::ensure!(!(clip_ladder && args.iter().any(|a| a == "--only-base")),
                 "--clip-ladder and --only-base are mutually exclusive");
             let p = shadow::Params {
@@ -128,6 +139,7 @@ async fn main() -> Result<()> {
                 ),
                 only_base: args.iter().any(|a| a == "--only-base"),
                 clip_ladder,
+                residual_ladder,
                 stop_before_close_s: flag("--stop-before-close-s").map_or(Ok(120), |v| v.parse())?,
                 ..shadow::Params::default()
             };
@@ -135,9 +147,15 @@ async fn main() -> Result<()> {
         }
         Some("live") => {
             // ARMED. Requires the explicit flag so it can never start by accident.
-            if !args.iter().any(|a| a == "--armed") {
-                bail!("live places REAL orders; pass --armed to confirm");
+            // `--dry-run` sends nothing (no order, amend, cancel or order group) but still runs
+            // the whole receive/decide path, which is the only safe way to read the stage timers
+            // in live::Timing on a crypto series. `sports-live` already had this; `live` did not.
+            let dry = args.iter().any(|a| a == "--dry-run");
+            if !dry && !args.iter().any(|a| a == "--armed") {
+                bail!("live places REAL orders; pass --armed to confirm (or --dry-run to send nothing)");
             }
+            live::DRY.store(dry, std::sync::atomic::Ordering::Relaxed);
+            if dry { eprintln!("DRY RUN: no order, amend, cancel or order group is sent"); }
             let num = |name: &str, default: f64| flag(name).map_or(Ok(default), |v| v.parse::<f64>());
             let params = live::LiveParams {
                 series: flag("--series")
@@ -162,9 +180,13 @@ async fn main() -> Result<()> {
                 exchange_index: num("--exchange-index", 2.0)? as i64,
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/live".into())),
                 penny_room: num("--penny-room", 0.0)? as i64,
+                book_residual: args.iter().any(|a| a == "--book-residual"),
                 open_cutoff_s: num("--open-cutoff-s", 120.0)? as i64,
                 amend: args.iter().any(|a| a == "--amend"),
                 spot_bps: num("--spot-bps", 0.0)?,
+                max_round_net_fp: (num("--max-round-net", 0.0)? * book::SIZE_SCALE as f64) as i64,
+                open_lo_c: num("--open-min-c", 0.0)?,
+                open_hi_c: num("--open-max-c", 100.0)?,
                 sports: None,
             };
             live::run(load_auth()?, params).await.map(|_| ())
@@ -211,9 +233,13 @@ async fn main() -> Result<()> {
                 exchange_index: num("--exchange-index", 0.0)? as i64,
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/sports-live".into())),
                 penny_room: 1,
+                book_residual: false,
                 open_cutoff_s: 0,
                 amend: !args.iter().any(|a| a == "--no-amend"),
                 spot_bps: 0.0,
+                max_round_net_fp: 0,
+                open_lo_c: 0.0,
+                open_hi_c: 100.0,
                 sports: Some(live::SportsLive {
                     tags,
                     parents,
@@ -349,7 +375,7 @@ async fn rtt(n: usize) -> Result<()> {
     let mut s = Samples::new(n);
     for _ in 0..(n / 10).max(10) {
         let t = Instant::now();
-        let (mut ws, _) = connect_async(signed_ws_request(&auth)?).await?;
+        let (mut ws, _) = connect_ws(signed_ws_request(&auth)?).await?;
         s.push(t.elapsed().as_micros() as i64, 1.0);
         let _ = ws.close(None).await;
     }
@@ -366,8 +392,41 @@ fn load_auth() -> Result<Auth> {
     }
 }
 
+/// Kalshi's load balancer has nodes in two AZs and the REST backend sits behind one of them, so which
+/// node IP a connection lands on moves order latency by ~1 ms (measured 2026-10-06: 2.88 vs 4.02 ms
+/// p50 from the same box). `KALSHI_REST_IP` / `KALSHI_WS_IP` pin the connection to a chosen node;
+/// unset keeps DNS behaviour. TLS still validates the hostname because only the address is overridden.
+fn pinned_ip(var: &str) -> Option<std::net::SocketAddr> {
+    let ip = env::var(var).ok()?;
+    let ip: std::net::IpAddr = ip.split(',').next()?.trim().parse().ok()?;
+    Some(std::net::SocketAddr::new(ip, 443))
+}
+
+/// Same as `connect_async`, but dials `KALSHI_WS_IP` when set (SNI/Host stay the URL's hostname).
+pub(crate) async fn connect_ws<R: tokio_tungstenite::tungstenite::client::IntoClientRequest + Unpin>(
+    req: R,
+) -> Result<(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
+    match pinned_ip("KALSHI_WS_IP") {
+        Some(addr) => {
+            let tcp = tokio::net::TcpStream::connect(addr).await?;
+            tcp.set_nodelay(true)?;
+            Ok(tokio_tungstenite::client_async_tls_with_config(req, tcp, None, None).await?)
+        }
+        None => Ok(connect_async(req).await?),
+    }
+}
+
 fn client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder();
+    if let (Some(addr), Ok(url)) = (pinned_ip("KALSHI_REST_IP"), reqwest::Url::parse(&rest_base())) {
+        if let Some(host) = url.host_str() {
+            builder = builder.resolve(host, addr);
+        }
+    }
+    builder
         .tcp_nodelay(true)
         .pool_idle_timeout(Duration::from_secs(90))
         .timeout(Duration::from_secs(5))
@@ -408,26 +467,33 @@ async fn discover(tx: mpsc::Sender<Discovered>, series: Vec<String>) -> Result<(
     loop {
         tick.tick().await;
         for series in &series {
-            let url = format!("{}/markets?series_ticker={series}&status=open&limit=20", rest_base());
-            let body: Value = match http.get(&url).send().await {
-                Ok(r) => match r.json().await {
-                    Ok(v) => v,
+            for (status, limit) in [("open", 20), ("unopened", 200)] {
+                let url = format!("{}/markets?series_ticker={series}&status={status}&limit={limit}", rest_base());
+                let body: Value = match http.get(&url).send().await {
+                    Ok(r) => match r.json().await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("discover {series} {status}: {e}");
+                            continue;
+                        }
+                    },
                     Err(e) => {
-                        eprintln!("discover {series}: {e}");
+                        eprintln!("discover {series} {status}: {e}");
                         continue;
                     }
-                },
-                Err(e) => {
-                    eprintln!("discover {series}: {e}");
-                    continue;
-                }
-            };
-            for m in body["markets"].as_array().into_iter().flatten() {
-                let Some(ticker) = m["ticker"].as_str() else { continue };
-                let close = m["close_time"].as_str().and_then(rfc3339_ms).unwrap_or(0);
-                if seen.insert(ticker.to_owned()) {
-                    tx.send(Discovered { ticker: ticker.to_owned(), close_unix_ms: close })
-                        .await?;
+                };
+                let now = unix_ms() as i64;
+                for m in body["markets"].as_array().into_iter().flatten() {
+                    let Some(ticker) = m["ticker"].as_str() else { continue };
+                    let close = m["close_time"].as_str().and_then(rfc3339_ms).unwrap_or(0);
+                    if status == "unopened" {
+                        let open = m["open_time"].as_str().and_then(rfc3339_ms).unwrap_or(0);
+                        if open < now || open > now + 60_000 { continue; }
+                    }
+                    if seen.insert(ticker.to_owned()) {
+                        tx.send(Discovered { ticker: ticker.to_owned(), close_unix_ms: close })
+                            .await?;
+                    }
                 }
             }
         }
@@ -566,7 +632,7 @@ async fn probe(out: PathBuf, minutes: u64, mut dump: usize) -> Result<()> {
     report_tick.tick().await;
 
     'outer: while Instant::now() < deadline {
-        let (mut ws, _) = match connect_async(signed_ws_request(&auth)?).await {
+        let (mut ws, _) = match connect_ws(signed_ws_request(&auth)?).await {
             Ok(x) => x,
             Err(e) => {
                 eprintln!("ws connect: {e}");
