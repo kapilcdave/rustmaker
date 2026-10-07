@@ -98,7 +98,62 @@ reliance on replay tolerance.
 **But it is now a 16 µs optimisation.** Worth building only if a stage-timing pass shows signing
 has somehow become material. It has not.
 
-## What is still unmeasured, and is the only local lever left
+## ⚑ MEASURED: the decision path is 45 µs. The MARKET DATA FEED is 5.7 ms.
+
+Stage timers added to `live.rs` and run `--dry-run` on `KXETH15M` for 3 min on the az2 box
+(19 reporting intervals, ~2,653 frames per 10 s = **265 msg/s**). Medians of per-interval quantiles:
+
+| stage | p1 | p50 | p99 |
+| --- | ---: | ---: | ---: |
+| **feed_age — venue `ts` → our receipt** | **3,635 µs** | **5,749 µs** | **10,058 µs** |
+| parse (`serde_json::from_str`) | 1 | 2 | 18 |
+| book apply + touch (incl. its journal rows) | 0 | 2 | 16 |
+| receipt → `decide` marker | 2 | 8 | 48 |
+| **receipt → order spawn (ALL our compute)** | **25** | **44** | **89** |
+| journal gzip write | 0 | 4 | 47 |
+
+**The budget closes exactly:** 5.75 ms feed + 0.044 ms our compute + 2.7–3.0 ms order-to-book
+≈ **8.5 ms**, against the ~8.2–8.5 ms reaction measured independently. Nothing is unaccounted for.
+
+### Everything we were about to optimise is a rounding error
+
+- **Our entire decision path is 44 µs — 0.5% of reaction.** Driving it to zero cannot move the
+  headline number.
+- **The journal gzip is 4 µs**, not the hundreds of µs suspected above. It is on the send path and
+  that is still ugly, but it is **not worth a writer thread for latency reasons**. The suspicion in
+  the section below was wrong, and the measurement is what settled it.
+- The two O(markets) scans are **0 µs** at this market count.
+- A bigger instance with an isolated core would compress our p99 (48 µs → maybe 20 µs). That is
+  **0.03 ms of an 8.5 ms budget.** The t3.micro was never the problem: unlimited credit mode,
+  0.2–2.4% CPU, and at 265 msg/s × 8 µs we use **0.2% of one core**.
+
+### ⚠ This is not the drain-time artifact
+
+[[a-receipt-timestamp-measures-drain-time-not-arrival]] is the right objection: a slow select loop
+inflates `feed_age` with our own queueing. It is ruled out here. Our drain can only **add**, so the
+low quantile bounds true transit, and **p1 is 3,635 µs with the lowest p1 seen at 3,470 µs** — the
+*fastest* frame still arrives 3.5 ms after the venue stamped it. Combined with 0.2% core
+utilisation, the floor is venue publish + network, not us. Residual caveat: `feed_age` compares our
+chrony clock (RMS 8.4 µs) to the venue's clock, so an unknown constant venue bias is possible —
+but no plausible NTP error is 3.5 ms, and the level was stable across all 19 intervals
+(5,466–5,941 µs p50).
+
+### So the path to ~7.5 ms runs through the FEED, and that is tier-gated too
+
+68% of reaction is waiting for market data. The only identified faster feed is **FIX market data**
+(`marketdata.fix.elections.kalshi.com`), behind the same entitlement wall as FIX order entry, and
+PrivateLink sits behind it as well. Competitors at ~7.5 ms are most likely buying a better feed
+path, not writing tighter code — our code is already within 45 µs of its floor.
+
+**How to apply:** stop spending on local latency. The remaining engineering levers are worth
+~0.05 ms combined; the venue-side 8.4 ms is worth 100× that and is bought commercially, not
+written. `to_spawn_us` p50 44 µs is the number to defend against regression, not to improve.
+
+(Sampling note: `to_spawn_us` shows `n~29` per interval against 2,653 frames, and reads 0 in
+intervals after posting stopped — it only samples frames that actually spawn an order. A p50 of 0
+there means "no posts", never "instant".)
+
+## What was still unmeasured before the above — now answered
 
 `live.rs` takes **no monotonic clock reading per message** — one `unix_us()` at `live.rs:563` and
 nothing after. Invisible: parse, `book.apply_delta`, two O(markets) scans (`live.rs:638-655`), the
