@@ -98,6 +98,63 @@ reliance on replay tolerance.
 **But it is now a 16 µs optimisation.** Worth building only if a stage-timing pass shows signing
 has somehow become material. It has not.
 
+## Ed25519 migration completed 2026-10-07 — and a correction
+
+Full key census, one read-only `GET /portfolio/balance` per credential:
+
+| env | key id | alg | status |
+| --- | --- | --- | --- |
+| `trading/kalshi-mm15/.env`, `kalshi-mm15-cpen-live/.env` | `68c396c3` | RSA-PSS | **DEAD 401** |
+| `trading/secrets/.env` | `78ed31d4` | RSA-PSS | **DEAD 401** |
+| `trading/xvenue/.env` | `6ea3fca8` | RSA-PSS | **DEAD 401** |
+| `.config/kalshi/env.trade` | `641a25b1` | RSA-PSS | **DEAD 401** |
+| **`.config/kalshi/env`** | **`2e88fe77`** | **Ed25519** | **LIVE** |
+
+**There is exactly one live credential and it was already Ed25519**, so the venue-side migration was
+complete before we started. What remained was that five configs still pointed at dead RSA keys.
+
+### ⚠ Correction: gate_probe's 401 storm was a DEAD KEY, not the algorithm
+
+Earlier in this document the Sep-30 RSA-only binary is blamed for `gate_probe`'s
+`ws connect: HTTP error: 401 Unauthorized` and 0-byte tapes. **That was wrong.** `gate_probe.sh`
+did not use the configured Ed25519 key at all — it set its own
+`KALSHI_PRIVATE_KEY_PATH=$HOME/.kalshi/key_mm15.pem`, an **RSA-2048** key the old binary parsed
+perfectly well. Its *key id* `68c396c3` was dead at the venue. The algorithm claim is still true of
+anything using `.config/kalshi/env` (an RSA-only binary rejects that 119-byte Ed25519 PKCS#8 at
+`Auth::new`), but it was not this job's failure. **A 401 names an unusable credential; it does not
+tell you which part is unusable — check the key id and the algorithm separately.**
+
+### What was changed
+
+- `kalshi-mm15-penny4/kalshi-mm15` swapped to the Ed25519-capable build
+  (sha256 `3802193a…`, from commit `94d902e`); previous RSA-only binary kept as
+  `kalshi-mm15.rsa-sep30.bak` (`fc72e0a3…`). `PROVENANCE.txt` written alongside. Deliberately
+  **not** applied to `rustmaker/rustmaker` or `xvenue/*`: despite the shared remote, that binary
+  exposes a `rustmaker` subcommand this build does not, so it is a different tool.
+- `gate_probe.sh` now sources the single live credential instead of the dead RSA one. Collection
+  resumed immediately: **tape 335 KB and stats 24 KB within 90 s, zero 401s**, against 0-byte files
+  for the preceding ~7.5 h. Script backed up as `gate_probe.sh.bak-20261007`.
+- Dead RSA material retired to `~/.kalshi/dead-20261007/` and
+  `~/.config/kalshi/dead-20261007/` (a move, so reversible) with a README, so no job can silently
+  pick up a dead key again.
+
+### ⛔ The four remaining dead configs were deliberately NOT repaired
+
+`secrets/.env`, `xvenue/.env`, `kalshi-mm15/.env` and `cpen-live/.env` still carry dead ids, and
+several drive order-placing rigs. **A dead credential is the only thing keeping a forgotten
+executor inert** — exactly the `live_sports_loop.sh` case from 10-06, which was respawning
+`rustmaker --exec --max-contracts 5` and had logged 31,118 401s while unable to trade. Repointing
+those at the live key would be an **arming action**, not a fix. Each needs a freshly issued, scoped
+key applied deliberately, and the collector ought to get its own read-only key rather than keep
+sharing the trading credential.
+
+### Feed age replicates independently
+
+The restarted probe immediately reproduced the headline below on a **different series via a
+different code path**: `KXXRP15M.trade.feed_age_us` **p50 5,905 µs / p1 3,544 µs** (`probe` mode,
+XRP) against **5,749 / 3,635** measured in `live` on ETH. Two code paths, two series, same ~5.7 ms
+floor — the number is not an artifact of the `live` instrumentation.
+
 ## ⚑ MEASURED: the decision path is 45 µs. The MARKET DATA FEED is 5.7 ms.
 
 Stage timers added to `live.rs` and run `--dry-run` on `KXETH15M` for 3 min on the az2 box
