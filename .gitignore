@@ -4,3 +4,18 @@ data/
 __pycache__/
 *.pyc
 .env
+
+# ML artifacts: derived datasets and trained weights, not source.
+# `ml/` is 415 MB of the repo's 416 MB of untracked content, and git history is
+# append-only, so committing these would bloat every future clone permanently.
+# The datasets are regenerable from the tapes under data/ and the weights belong
+# in object storage, not here. ml/ CODE and configs are tracked.
+ml/data/
+ml/runs/*/checkpoint*/
+ml/runs/*/*.safetensors
+ml/runs/*/*_pred.csv
+*.parquet
+
+# Raw per-run tapes dropped next to the analysis that consumed them. The reports
+# (*_report.json) ARE tracked, because findings cite them.
+idea_lab/*_tapes.jsonl
