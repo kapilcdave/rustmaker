@@ -17,14 +17,28 @@
 > Together they move the ungated per-contract level from **−0.1321 → +0.1215 c/ct** against the
 > 8.04M-real-print ledger's **+0.254** — from the wrong sign to the right sign, 2.1× low.
 >
-> **What this changes on this page.** `always` is **not** −33.4 c/market; on a corrected instrument
-> the ungated improved-quote maker is **profitable**. `room4` is not +65.7 and does not carry a
-> +91.7 c/market edge over `always` — its real marginal value is about **+2.6**, i.e. **2.0% of the
-> oracle headroom**. So "this seat needs a gate", the premise of this whole page, is largely an
-> artifact. The *paired* comparisons here survive (all arms shared the rows); the levels do not, and
-> neither does the width gradient they rest on.
+> **What this changes on this page.** `always` is **not** −33.4 c/market and `room4` is not +65.7,
+> and it does not carry a +91.7 c/market edge over `always`. So "this seat needs a gate", the
+> premise of this whole page, is largely an artifact. The *paired* comparisons here survive (all
+> arms shared the rows); the levels do not, and neither does the width gradient they rest on.
 >
-> Current numbers: `FINDINGS_rlmm_v3_20261008.md`. Rebuilt datasets: `ml/data/mk5s-v5`.
+> **⚠ Amended 2026-10-08 on fresh tape** (`FINDINGS_rlmm_holdout_20261008.md`, 422 never-read
+> markets). Two sentences that stood here have been withdrawn, both of them val-fold statements:
+>
+> - ~~the ungated improved-quote maker is **profitable**~~ — on fresh tape the ungated level is
+>   **−0.0331 c/ct** and `always` is **−3.727 c/market** (v5's own test fold already read −1.521).
+>   The defensible claim is that the ungated level is **approximately zero, within ±0.13 c/ct on
+>   three windows** — not the wrong-signed −0.1321 the broken model reported.
+> - ~~`room4`'s marginal value is +2.6, **2.0% of the oracle headroom**~~ — that ratio is val-only.
+>   Recomputed as `(arm − always)/(oracle − always)`: `room4` **8.41%** → `c51v3` 9.58% on v5 test,
+>   **7.82% → 8.60%** on fresh tape. The critic adds ~10% relative out of sample, not 200%. Both
+>   arms still leave **>90%** of the headroom unclaimed, which is the part that matters.
+>
+> What the fresh tape *confirmed*: the corrected instrument's levels transfer across disjoint
+> windows (`room4` +6.709 → +5.490), and `c51v3 − room4 = +0.910 ± 0.887` replicates v5's +1.142.
+>
+> Current numbers: `FINDINGS_rlmm_v3_20261008.md`, then `FINDINGS_rlmm_holdout_20261008.md`.
+> Rebuilt datasets: `ml/data/mk5s-v5`; used holdout `ml/data/holdout-01` (do not re-score).
 > The RL arm that supersedes the GLiNER work: `ml/rl/`.
 
 # GLiNER gate for the 15M quoter — on GCP
