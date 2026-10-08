@@ -46,6 +46,7 @@ from rl.train import (COVER_PER_ITER, GAMMA_RL, GRAD_STEPS_PER_ITER, LR,  # noqa
                       BATCH, BUFFER, HIDDEN, normalizer, paired, shift_null, width_overlap)
 
 SMOOTH = 3          # points in the val moving average used for checkpoint selection
+G2_BAR_C = 9.0      # magnitude bar, re-derived for the corrected instrument (PREREG_rlmm_v3 §3)
 # ⚑ MEASURED on the train fold before any val or test number existed (see FINDINGS_rlmm_v2):
 # the shaped 3-step return is heavy-tailed -- q0.001 is -71.19c but q0.01 is only -31.19c -- so
 # v1's q[0.001,0.999] support spent its 51 atoms covering a range set by 0.1% of the samples and
@@ -334,7 +335,11 @@ def main() -> None:
         log("fill-set decomposition vs room4: " + json.dumps(ov))
         pr = pairs["c51v2 - room4"]
         gates = {"G1_beats_room4_t2": bool(pr["t"] and pr["t"] >= 2.0 and pr["diff"] > 0),
-                 "G2_magnitude_20c": bool(pr["diff"] >= 20.0),
+                 # re-derived per instrument in PREREG_rlmm_v3: +9.0 c/market is what roughly
+                 # DOUBLES the live seat's all-time +0.134 c/ct, given v5's 135 fills/market and
+                 # the instrument's residual 2.1x understatement vs the real-print ledger. The
+                 # v2 bar of +20 was computed on an instrument since shown to be broken.
+                 "G2_magnitude": bool(pr["diff"] >= G2_BAR_C),
                  "G3_beats_glft": bool(pairs["c51v2 - glft"]["diff"] > 0),
                  "G4_not_room4_in_disguise": bool(ov["only_learned"]["rows"] > 0
                                                   and ov["jaccard"] < 0.9),

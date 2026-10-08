@@ -1,3 +1,32 @@
+> ## ⛔ ERRATUM 2026-10-08 — every `c/market` LEVEL below is measured on a broken fill model
+>
+> Two bugs in `features.market_rows` were found and fixed after everything on this page was
+> measured. Neither is a modelling choice; both changed **which fills exist**:
+>
+> 1. **The liveness rule was a collector-staleness proxy.** `live = (i == j)` on the book index
+>    required *no book update at all* in the 11 ms window. That passes **70.30%** of prints on the
+>    throttled `data/box/tape_*.csv.gz` (11.7 book updates/s) and **1.64%** on a full-fidelity
+>    gate-probe tape (p90 100 updates/s) — a 43× swing in the fill population from feed density
+>    alone. Fixed to touch-price equality.
+> 2. **A sweep is one fill opportunity reported as many prints.** The venue stamps every level of a
+>    sweep with one microsecond — measured, **332 prints at a single µs** walking 39c → 15c — and
+>    the model counted each as a fill. That produced **50.6%** exact-duplicate rows in `mk5s-v1/v2`
+>    data, concentrated in the most **adverse** events. Fixed by deduping to one opportunity per
+>    `(vt, side)` (full prints are still used for VWAP/volume/flow).
+>
+> Together they move the ungated per-contract level from **−0.1321 → +0.1215 c/ct** against the
+> 8.04M-real-print ledger's **+0.254** — from the wrong sign to the right sign, 2.1× low.
+>
+> **What this changes on this page.** `always` is **not** −33.4 c/market; on a corrected instrument
+> the ungated improved-quote maker is **profitable**. `room4` is not +65.7 and does not carry a
+> +91.7 c/market edge over `always` — its real marginal value is about **+2.6**, i.e. **2.0% of the
+> oracle headroom**. So "this seat needs a gate", the premise of this whole page, is largely an
+> artifact. The *paired* comparisons here survive (all arms shared the rows); the levels do not, and
+> neither does the width gradient they rest on.
+>
+> Current numbers: `FINDINGS_rlmm_v3_20261008.md`. Rebuilt datasets: `ml/data/mk5s-v5`.
+> The RL arm that supersedes the GLiNER work: `ml/rl/`.
+
 # GLiNER gate for the 15M quoter — on GCP
 
 A LoRA-fine-tuned GLiNER2.5 classifier that reads a serialized book snapshot and answers
