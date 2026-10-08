@@ -17,9 +17,12 @@ logistic / gradient-boosting arm can be trained on the SAME rows (the reproducti
 from __future__ import annotations
 
 import math
+import zlib
 
 import numpy as np
 import pandas as pd
+
+from rl.bocpd import bocpd_path, flow_bits
 
 LAG_US = 11_000        # measured decision -> book time (feed 6.2 ms + create 4.9 ms)
 MAKER_FEE_C = 0.0      # 15M crypto maker fills, matching penny.py; override per series if needed
@@ -40,6 +43,35 @@ K_AS = 108.62          # arrival decay per DOLLAR, age-standardised on 1.66M Kal
                        # reference distance, not a prescription. Order age is set by our own
                        # requote cadence, which makes k downstream of a policy choice.
 AS_HALF_C = 100.0 / K_AS       # 0.921 c -- the A-S optimal half spread at the standardised k
+CLIP_CT = 1.0          # contracts per quote. The improved quote creates a NEW level one tick
+                       # inside the touch, so by construction nothing rests ahead of it: the
+                       # queue-ahead term below is identically zero in THIS instrument, and that
+                       # is recorded as a column rather than asserted in prose.
+# ⚑ How "our quote was still live when the print landed" is decided. This is NOT a detail: it
+# selects the entire entry population, and the original rule turned out to be a proxy for how
+# COALESCED the collector's book feed was.
+#   "index" (the original): live iff there was no book update at all between t-LAG and t, i.e.
+#       i == j on the book index. Measured pass rate: 70.30% of prints on the throttled box tape
+#       `data/box/tape_*.csv.gz` (11.7 book updates/s, p90 16.8) and **1.64%** on the
+#       full-fidelity gate-probe tape (p90 100.1 updates/s). Same venue, same series, same
+#       instrument -- a 43x swing produced purely by feed density. On a dense feed almost every
+#       11 ms window contains some update, so the condition reports "nothing was ever fillable".
+#   "touch" (default): live iff the TOUCH PRICE our quote was built on is unchanged. A size-only
+#       update, or any update elsewhere in the book, does not cancel a resting order, so this is
+#       what the venue actually requires. Pass rate 83.77% throttled / 60.73% full-fidelity --
+#       still not identical, but the residual is a real difference in touch churn rather than an
+#       artifact of coalescing.
+# See the corpus note `every-measurement-on-the-throttled-box-was-on-a-stale-book`.
+LIVE_RULE = "touch"
+# Cap on entry rows kept per market. The statistical unit here is the MARKET -- every SE in this
+# corpus is market-clustered -- so rows per market past a few hundred buy almost nothing, while the
+# full-fidelity feed offers ~5,000 fillable prints per market and 2,700 markets would be ~21M rows
+# (over this box's 16 GB once the frame is concatenated). 400 matches the 444 rows/market the
+# throttled-tape dataset had, so `mk5s-v4` differs from `mk5s-v3` in MARKET COUNT, not row density.
+# The kept set is a seeded uniform subsample of the fillable population, drawn BEFORE the inventory
+# walk so the position cap sees the set it is actually capping, and `samp_rate` is recorded on every
+# row so a per-contract statistic is exact and a per-market one can be Horvitz-Thompson rescaled.
+MAX_ENTRIES_PER_MARKET = 400
 LABELS = ["BUY_YES", "BUY_NO", "HOLD", "TAKE_PROFIT", "STOP_LOSS"]
 EXIT_ACTIONS = ("TAKE_PROFIT", "STOP_LOSS")
 TASK = "action"
@@ -93,6 +125,31 @@ def _context(vt_us, bi, bvt, mid, I, Q, tv, cpv, cpc, csg, w_us=60_000_000):
     return out
 
 
+def _exposure(s, bsz, asz, q_ahead):
+    """Queue-adjusted quote-exposure imbalance for a quote resting on side `s`.
+
+    s = +1 means a yes-taker lifted our improved ASK, so we are short yes and an UPWARD move is
+    adverse. Upward pressure is bid depth; the old ask size sits behind our quote and cushions
+    further adverse travel. So:
+
+        pressure = bsz, support = asz   (s > 0)
+        pressure = asz, support = bsz   (s < 0)
+
+    `qxi` is the raw signed imbalance, `qxi_q` divides the support by the queue ahead of us (we
+    are only protected by size we are not standing in front of) and charges our own clip to the
+    denominator, which shrinks the imbalance toward zero on a book too thin for it to mean
+    anything. Both are in [-1, 1]; positive = pressure toward the side that hurts us.
+    """
+    pressure = np.where(s > 0, bsz, asz).astype(float)
+    support = np.where(s > 0, asz, bsz).astype(float)
+    eff = support / (1.0 + q_ahead)
+    return {
+        "q_ahead_ct": q_ahead,
+        "qxi": (pressure - support) / np.maximum(pressure + support, 1.0),
+        "qxi_q": (pressure - eff) / np.maximum(pressure + eff + CLIP_CT, 1.0),
+    }
+
+
 def _derive(f: pd.DataFrame) -> pd.DataFrame:
     """Row-level features built from the context columns. Signed by s wherever a direction exists,
     so one coefficient covers both sides instead of the model having to learn the sign twice."""
@@ -105,6 +162,10 @@ def _derive(f: pd.DataFrame) -> pd.DataFrame:
     f["as_resv_c"] = f.mid_c + f.as_skew_c           # A-S reservation price
     f["as_edge_c"] = f.s * (f.px_c - f.as_resv_c)    # distance of our quote from it, signed
     f["as_room_c"] = f.s * (f.px_c - f.mid_c) - AS_HALF_C   # half spread minus the A-S optimum
+    # BOCPD: >0 means the regime's arrivals lean toward OUR side -- more fills, and adverse ones
+    f["bias_adv"] = f.s * (2.0 * f.bias_mean - 1.0)
+    # the exposure imbalance amplified when the fill ADDS to inventory (fill direction is -s)
+    f["qxi_lean"] = f.qxi_q * (1.0 + (f.pos_before * -f.s) / POS_CAP)
     return f
 
 
@@ -135,12 +196,41 @@ def market_rows(bb: pd.DataFrame, tt: pd.DataFrame, close_us: int, result_yes: f
     csg = np.concatenate([[0.0], np.cumsum(tsg * tc)])     # signed size, for taker flow
     ctx = lambda v, bi: _context(v, bi, bvt, mid, I, Q, tv, cpv, cpc, csg)  # noqa: E731
 
+    # ⚑ ONE fill opportunity, and one ARRIVAL, per (instant, side). A taker sweeping the book is
+    # reported as many prints sharing a single venue timestamp -- measured here, one BTC 15M sweep
+    # is 332 prints at the same microsecond walking 39c down to 15c -- and our quote is ONE
+    # contract resting a tick inside the touch, so it can be filled once in that event, not 332
+    # times. Keeping every print produced 35.9% duplicate rows in mk5s-v4 and 50.6% in mk5s-v3,
+    # identical in every column, and the duplication is concentrated in SWEEPS, i.e. in the most
+    # adverse events on the tape -- which inflates measured adverse selection, the direction of
+    # this instrument's known error against the 8.04M-real-print ledger.
+    # The first print of a group is the one that would have hit a quote at the best price.
+    #
+    # NOTE the two streams are deliberately different, and which one each statistic uses matters:
+    #   `ts`  every print  -> VWAP, taker volume and signed flow, because those are real traded
+    #                         CONTRACTS and a sweep genuinely moved all of that size;
+    #   `tf`  one per (vt, side) -> fill opportunities and the BOCPD arrival stream, because both
+    #                         are about taker DECISIONS and a sweep is one decision.
+    tf = ts.drop_duplicates(subset=["vt", "side"], keep="first")
+    tfv = tf.vt.to_numpy()
+    # BOCPD over the taker-side arrival stream. State index k is the posterior after the FIRST k
+    # arrivals, and k is the count at or before vt - LAG, so the lookup cannot see the arrival it
+    # is about to be asked to trade against -- same convention as the cumulative arrays above.
+    cps = bocpd_path(flow_bits(tf.side.to_numpy()))
+    bo = lambda v: {k: a[np.searchsorted(tfv, v - LAG_US, side="right")]  # noqa: E731
+                    for k, a in cps.items()}
+
     entries = []
-    for side, g in tt.sort_values("vt").groupby("side"):
+    for side, g in tf.groupby("side"):
         v = g.vt.to_numpy()
         i = np.searchsorted(bvt, v - LAG_US, side="right") - 1   # touch our quote was built on
         j = np.searchsorted(bvt, v, side="right") - 1            # touch just before the print
-        live = (i >= 0) & (i == j)                               # quote survived to the print
+        # quote survived to the print -- see LIVE_RULE for why this is not `i == j`
+        if LIVE_RULE == "touch":
+            ii_, jj_ = np.clip(i, 0, len(bvt) - 1), np.clip(j, 0, len(bvt) - 1)
+            live = (i >= 0) & (bid[ii_] == bid[jj_]) & (ask[ii_] == ask[jj_])
+        else:
+            live = (i >= 0) & (i == j)
         i = np.clip(i, 0, len(bvt) - 1)
         b, a = bid[i], ask[i]
         tk = tick_fp(np.where(side == "yes", a, b))
@@ -167,6 +257,11 @@ def market_rows(bb: pd.DataFrame, tt: pd.DataFrame, close_us: int, result_yes: f
             "mom1s_c": mom1, "mom5s_c": mom5,
             "ttc_s": (close_us - vv) / 1e6,
             **ctx(vv, ii),
+            **bo(vv),
+            # q_ahead is 0 by construction: the improved quote is a NEW level inside the touch,
+            # so nothing is resting in front of it. Carried as a column so the collapse of the
+            # "queue-adjusted" term in this instrument is auditable, not asserted.
+            **_exposure(s, bsz[ii], asz[ii], 0.0),
             "mk5s_c": s * (px_c - _at(k5, mid)),
             "mk60s_c": s * (px_c - _at(k60, mid)),
             "pos_before": 0.0,
@@ -174,6 +269,16 @@ def market_rows(bb: pd.DataFrame, tt: pd.DataFrame, close_us: int, result_yes: f
     if not entries:
         return None
     e = pd.concat(entries, ignore_index=True).sort_values("vt").reset_index(drop=True)
+    # subsample the fillable population BEFORE the inventory walk (see MAX_ENTRIES_PER_MARKET)
+    n_fillable = len(e)
+    if MAX_ENTRIES_PER_MARKET and n_fillable > MAX_ENTRIES_PER_MARKET:
+        # zlib.crc32, NOT hash(): Python salts str hashes per process, so hash() would
+        # silently draw a different subsample on every build and nothing would be replicable
+        rs = np.random.default_rng(zlib.crc32(ticker.encode()))
+        keep = np.sort(rs.choice(n_fillable, MAX_ENTRIES_PER_MARKET, replace=False))
+        e = e.iloc[keep].reset_index(drop=True)
+    e["samp_rate"] = len(e) / n_fillable
+    e["n_fillable"] = float(n_fillable)
     # Three marks for the same fill. The LABEL and the scored metric must be the same one, or the
     # model is trained to optimize something the arm table does not measure; `mark` picks it once and
     # build_dataset records it in the manifest so the scorer cannot disagree.
@@ -202,7 +307,12 @@ def market_rows(bb: pd.DataFrame, tt: pd.DataFrame, close_us: int, result_yes: f
     # across markets (the JSONL subsample) then silently pools unrelated lots
     e["lot_id"] = [f"{ticker}#{k}" for k in range(len(e))]
     exits = []
-    for lot in e.itertuples():
+    # Under a markout mark, build_dataset discards every exit row (cross-out-vs-carry is a
+    # settlement statement), so constructing them is pure cost -- and it is the DOMINANT cost:
+    # on a full-fidelity tape the 5 s exit grid outnumbers entries ~15:1, which is what made a
+    # 2,700-market build need ~17M rows at the concat peak on a 16 GB box instead of ~1M.
+    build_exits = mark == "settle"
+    for lot in (e.itertuples() if build_exits else ()):
         grid = np.arange(lot.vt + EXIT_GRID_US,
                          min(lot.vt + MAX_LOT_AGE_US, close_us - 120_000_000), EXIT_GRID_US)
         if not len(grid):
@@ -227,6 +337,11 @@ def market_rows(bb: pd.DataFrame, tt: pd.DataFrame, close_us: int, result_yes: f
             "mom1s_c": mid[ii] - _at(i1, mid), "mom5s_c": mid[ii] - _at(i5, mid),
             "ttc_s": (close_us - grid) / 1e6,
             **ctx(grid, ii),
+            **bo(grid),
+            # on an exit row we are crossing, not resting, so there is no queue of our own: the
+            # exposure terms describe the book pressure against the position we are holding,
+            # computed on the side the lot was opened from.
+            **_exposure(lot.s, bsz[ii], asz[ii], 0.0),
             "mk5s_c": np.nan, "mk60s_c": np.nan, "settle_c": np.nan,
             "pos_before": float(lot_pos), "lot_id": lot.lot_id,
             "entry_px_c": lot.px_c, "unreal_c": unreal, "age_s": (grid - lot.vt) / 1e6,
@@ -284,3 +399,12 @@ CONTEXT_NUMERIC = ["vwap_c", "vwap60_c", "vwap_dev_c", "px_vwap_c", "ma10_c", "m
                    "mid_ma10_c", "mid_ma60_c", "sigma_c", "tvol60", "flow60", "flow_adv60",
                    "as_skew_c", "as_resv_c", "as_edge_c", "as_room_c"]
 NUMERIC = BASE_NUMERIC + CONTEXT_NUMERIC
+# v3, for the RL arm only: the Bayesian online change-point posterior over directional taker-flow
+# bias, and the queue-adjusted quote-exposure imbalance. `NUMERIC` is deliberately left alone so
+# the `logit` / `room4` benchmarks keep scoring the exact feature set they were measured on.
+REGIME_NUMERIC = ["cp_prob", "cp_recent", "bias_mean", "bias_sd", "run_len", "bias_adv"]
+QUEUE_NUMERIC = ["q_ahead_ct", "qxi", "qxi_q", "qxi_lean"]
+RL_NUMERIC = NUMERIC + REGIME_NUMERIC + QUEUE_NUMERIC
+# recomputed inside the RL environment from the policy's OWN inventory path, because a selective
+# policy carries a different position than the `always` quoter the dataset's column was built from
+POS_DEPENDENT = ["pos_before", "as_skew_c", "as_resv_c", "as_edge_c", "qxi_lean"]

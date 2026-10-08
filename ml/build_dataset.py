@@ -45,21 +45,41 @@ def results(tickers, cache_path=CACHE):
 
 
 def build(tapes, mark):
-    frames = []
+    """Tapes -> decision rows. A tape that cannot be read is SKIPPED AND NAMED, never silent.
+
+    A drain that writes a 0-byte or truncated .gz is a normal operational event here (7 of 68
+    gate-probe tapes were 0 bytes and one was a partial write), and one `EOFError` used to abort a
+    90-minute build after 38 tapes. But a silently shortened universe is time-biased, not just
+    smaller, so the skipped list and the surviving tape count both go into the manifest.
+    """
+    frames, skipped = [], []
     for path in tapes:
-        b, t = load(path)
-        tickers = sorted(set(b.ticker.unique()) & set(t.ticker.unique()))
+        try:
+            b, t = load(path)
+            tickers = sorted(set(b.ticker.unique()) & set(t.ticker.unique()))
+        except (EOFError, OSError, ValueError, KeyError, pd.errors.ParserError) as e:
+            skipped.append({"tape": Path(path).name, "error": f"{type(e).__name__}: {e}"})
+            print(f"{Path(path).name}: SKIPPED ({type(e).__name__}: {e})", file=sys.stderr)
+            continue
         res = results(tickers)
+        n_ok = 0
         for tk in tickers:
             d = market_rows(b[b.ticker == tk], t[t.ticker == tk], close_utc(tk), res[tk], tk,
                             mark=mark)
             if d is not None and len(d):
                 d["tape"] = Path(path).name
                 frames.append(d)
-        print(f"{Path(path).name}: {len(tickers)} markets", file=sys.stderr)
+                n_ok += 1
+        print(f"{Path(path).name}: {len(tickers)} markets ({n_ok} with rows)", file=sys.stderr)
     if not frames:
         sys.exit("no rows built")
-    return pd.concat(frames, ignore_index=True).sort_values("vt").reset_index(drop=True)
+    if skipped:
+        print(f"\n{len(skipped)} of {len(tapes)} tapes skipped:", file=sys.stderr)
+        for s in skipped:
+            print(f"  {s['tape']}: {s['error']}", file=sys.stderr)
+    out = pd.concat(frames, ignore_index=True).sort_values("vt").reset_index(drop=True)
+    out.attrs["skipped_tapes"] = skipped
+    return out
 
 
 def chrono_split(d, train=0.60, val=0.15):
@@ -119,6 +139,8 @@ def main():
     d.to_parquet(out / "rows.parquet", index=False)
 
     manifest = {"rows": len(d), "markets": int(d.ticker.nunique()), "tapes": a.tapes,
+                "tapes_requested": len(a.tapes),
+                "tapes_skipped": d.attrs.get("skipped_tapes", []),
                 "mark": a.mark, "kinds": d.kind.value_counts().to_dict(),
                 "exit_per_lot_in_jsonl": a.exit_per_lot,
                 "numeric_features": NUMERIC, "labels": LABELS, "folds": {}}

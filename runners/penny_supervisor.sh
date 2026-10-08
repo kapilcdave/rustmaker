@@ -49,15 +49,36 @@ PENNY_ROOM="${PENNY_ROOM:-4}"
 #      series needs ~100c x series x clip before any inventory. Zero `insufficient` rejects across
 #      31 runs / 1,056,028 posts at balances $8.98-$46.65; at $2.86 the venue refused 11,227 of
 #      19,806 posts (57%). Below this the engine cannot display its own quotes.
-#   2. DRAWDOWN: round-level P&L is mean +16.0c, sd 75.4c, worst -175c, observed max DD $3.97 over
-#      123 rounds at clip 1. A $1-2 session cap -- what the 09-29..10-02 runs ran -- is BELOW the
-#      seat's own observed drawdown, so it fires on noise, locks the loss, strands the position
-#      without its exit leg and blocks re-entry through the settle wait. Every cap-killed run in
-#      the history is -4 to -12 c/mkt. Default is the measured max DD, scaled by clip.
+#   2. DRAWDOWN: a $1-2 session cap -- what the 09-29..10-02 runs ran -- is BELOW the seat's own
+#      drawdown, so it fires on noise, locks the loss, strands the position without its exit leg
+#      and blocks re-entry through the settle wait. Every cap-killed run in the history is
+#      -4 to -12 c/mkt.
+#      ⚠ RESIZED 2026-10-07 off a 4x larger sample (`ruin.py`, 493 rounds / 2,249 markets /
+#      14,929 contracts, all history + the 10-07 armed run). The numbers this block used to quote
+#      came from a 123-round subset and were optimistic on BOTH tails:
+#          mean  +16.0c -> +3.24c        sd 75.4c -> 82.57c        worst round -175c -> -353.9c
+#      So the 400c default is 4.84 round-sd, and the first-passage simulation says a run at that
+#      cap survives a full day only 55% of the time and a week 38% -- i.e. the cap, not the
+#      market, is what has been destroying the sample. Survival at the measured distribution:
+#          cap  400c -> P(week) 38%   |  1600c -> 85%  |  3200c -> 98%
+#      1600-3200c is what a week of continuous quoting needs, and it requires funding the shard to
+#      >= cap + collateral floor (~$25-41 at 9 series, clip 1). The default is LEFT at 400c
+#      deliberately: raising the risk budget is the operator's call, not a script's, and the edge
+#      it would be risked against is +3.24c/round at t = +0.87 -- not established.
 COLLATERAL_C="${COLLATERAL_C:-}"            # default: 100c x n_series x clip
 MAX_DD_C="${MAX_DD_C:-$(( 400 * CLIP ))}"   # total drawdown budget
 SESSION_CAP_C="${SESSION_CAP_C:-$MAX_DD_C}" # per-run cap; never larger than the total budget
 SERIES="${SERIES:-KXBTC15M,KXETH15M,KXSOL15M,KXXRP15M,KXDOGE15M,KXHYPE15M,KXBNB15M,KXZEC15M,KXNEAR15M}"
+# Express a pull by amending the quote PULL_AMEND_TICKS out of the way instead of cancelling it, so
+# the order keeps its id and never leaves the book. 54.4% of requotes on run 12 went cancel+create,
+# off the book p50 10.8 ms (1,349 s in total), and 171 prints landed at the new price inside those
+# gaps. Where an amend cannot express the pull (partial fill, no id, price off the grid, too few
+# tokens) the engine still cancels: the pull always happens, only the verb is negotiable.
+AMEND_ONLY="${AMEND_ONLY:-0}"
+# Per-market position cap. The refill seat the ~7.5 ms makers occupy priced at +3.92 c/ct on real
+# prints and needs this above 1, but collateral scales with it: 9 series at max-pos 3 wants ~$27-36
+# of exposure before any drawdown budget.
+MAX_POS="${MAX_POS:-$CLIP}"
 log() { echo "$(date -u +%FT%TZ) $*"; }
 
 shard2_cents() {
@@ -76,7 +97,7 @@ wait_for_settlement() {
 [ -x "$BIN" ] || { log "PREFLIGHT FAIL: $BIN is not an executable"; exit 1; }
 [ -f "$ENV_FILE" ] || { log "PREFLIGHT FAIL: credential $ENV_FILE does not exist"; exit 1; }
 n_series=$(awk -F, '{print NF}' <<<"$SERIES")
-: "${COLLATERAL_C:=$(( 100 * n_series * CLIP ))}"
+: "${COLLATERAL_C:=$(( 100 * n_series * MAX_POS ))}"
 [ "$SESSION_CAP_C" -le "$MAX_DD_C" ] || { log "PREFLIGHT FAIL: session cap ${SESSION_CAP_C}c exceeds the total drawdown budget ${MAX_DD_C}c"; exit 1; }
 # One AUTHENTICATED read, because no unauthenticated endpoint can report on the control channel
 # (topics-live-arming-and-plumbing). This is also the balance read, on the TRADING SHARD.
@@ -88,7 +109,14 @@ if [ "$bal0" -lt "$need" ]; then
     log "  (${n_series} series x clip ${CLIP}) + ${MAX_DD_C}c drawdown budget. Fund the shard or lower CLIP/MAX_DD_C."
     exit 1
 fi
-MIN_HEAD_C=$(( MAX_DD_C / 5 ))
+# Refuse to start on headroom too small to be a cap rather than a coin flip. A fifth of the
+# drawdown budget (80c at the default) is 0.97 ROUND-SD: a run launched with that much rope stops
+# on its first ordinary round, locks the loss and strands the leftover without its exit leg, which
+# is strictly worse than not having started. 250c is 3 round-sd at the measured sd of 82.57c.
+# This is the barrier that would have refused the 16:32Z run on 2026-10-07 (headroom 152c = 1.8
+# round-sd) instead of letting it trip the cumulative cap at zero seconds.
+MIN_HEAD_C="${MIN_HEAD_C:-250}"
+[ "$MIN_HEAD_C" -ge 250 ] || log "WARNING: MIN_HEAD_C ${MIN_HEAD_C}c is under 3 round-sd (250c); a cap this small fires on noise"
 [ -f data/live_penny/live_state.json ] && mv data/live_penny/live_state.json "data/live_penny/live_state_$(date -u +%Y%m%dT%H%M%SZ).json"
 log "PREFLIGHT OK: bin $BIN, cred $ENV_FILE, shard 2 cash ${bal0}c >= ${need}c"
 log "start: collateral floor ${COLLATERAL_C}c, drawdown budget ${MAX_DD_C}c, per-run cap ${SESSION_CAP_C}c; engine baseline re-based"
@@ -100,15 +128,16 @@ while true; do
     head=$(( bal - FLOOR_C ))
     log "shard 2 cash ${bal}c, floor ${FLOOR_C}c, headroom ${head}c"
     [ "$bal" -lt "$FLOOR_C" ] && { log "below floor; exiting"; exit 0; }
-    [ "$head" -lt "$MIN_HEAD_C" ] && { log "headroom under ${MIN_HEAD_C}c (a fifth of the drawdown); exiting"; exit 0; }
+    [ "$head" -lt "$MIN_HEAD_C" ] && { log "headroom ${head}c under ${MIN_HEAD_C}c (3 round-sd); a cap this small fires on noise -- fund the shard rather than running it; exiting"; exit 0; }
     cap=$(( head < SESSION_CAP_C ? head : SESSION_CAP_C ))
     n=$((n + 1))
     out="data/live_penny/sup_$(date -u +%Y%m%dT%H%M%SZ).log"
     band=$([ "$OPEN_MIN_C" = 0 ] && [ "$OPEN_MAX_C" = 100 ] && echo "off" || echo "${OPEN_MIN_C}-${OPEN_MAX_C}c")
     log "run $n: ${SERIES}, spot ${SPOT_BPS} bps, penny room ${PENNY_ROOM}, clip ${CLIP}, open band ${band}, session cap ${cap}c -> $out"
     start=$(date -u +%s)
-    "$BIN" live --armed --env-file "$ENV_FILE" --penny-room "$PENNY_ROOM" --amend --spot-bps "$SPOT_BPS" --max-round-net $((2 * CLIP)) \
-        --clip "$CLIP" --max-pos "$CLIP" --group-limit $((12 * CLIP)) \
+    [ "$AMEND_ONLY" = 1 ] && amend_flag=--amend-only || amend_flag=--amend
+    "$BIN" live --armed --env-file "$ENV_FILE" --penny-room "$PENNY_ROOM" "$amend_flag" --spot-bps "$SPOT_BPS" --max-round-net $((2 * MAX_POS)) \
+        --clip "$CLIP" --max-pos "$MAX_POS" --group-limit $((12 * CLIP)) \
         --stop-before-close-s 450 --open-cutoff-s 450 --open-min-c "$OPEN_MIN_C" --open-max-c "$OPEN_MAX_C" --series "$SERIES" --minutes 480 \
         --max-loss-c "$cap" --cum-max-loss-c "$MAX_DD_C" --out data/live_penny > "$out" 2>&1 < /dev/null
     rc=$?
