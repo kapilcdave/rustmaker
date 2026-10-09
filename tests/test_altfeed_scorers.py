@@ -223,13 +223,51 @@ class XcorrPeak(unittest.TestCase):
         b[: n + lag_true] = a[-lag_true:]  # b[t] = a[t - lag_true]
         b += 0.05 * rng.standard_normal(n)
         for min_bins in (10, 200):
-            got = sc.xcorr_peak(a, b, max_lag=60, min_bins=min_bins)
+            # max_zero_share=1.0: this test is about FFT-vs-loop equivalence, and the fixture is
+            # deliberately 80% zeros, which the sparsity guard would (correctly) refuse.
+            got = sc.xcorr_peak(a, b, max_lag=60, min_bins=min_bins, max_zero_share=1.0)
             want = self.loop_peak(a, b, 60, min_bins)
             self.assertAlmostEqual(got["corr"], want[0], places=6, msg=f"min_bins={min_bins}")
             self.assertEqual(got["lead_ms"], want[1] * sc.BIN_US / 1000.0)
             self.assertEqual(got["n_bins"], want[2])
         # The construction above makes `a` the delayed one, so `b` leads: a negative lead for a.
-        self.assertLess(sc.xcorr_peak(a, b, max_lag=60, min_bins=10)["lead_ms"], 0)
+        self.assertLess(
+            sc.xcorr_peak(a, b, max_lag=60, min_bins=10, max_zero_share=1.0)["lead_ms"], 0
+        )
+
+
+    def test_a_sparse_grid_is_refused_rather_than_reported_as_a_weak_result(self):
+        """The defect this guard exists for, reproduced on a KNOWN-perfect relationship.
+
+        Measured on real data 2026-10-07: spot against the CF index — the index being computed
+        from those very venues — read corr 0.05-0.09 at 10 ms bins and 0.84-0.96 at 5 s bins.
+        The 10 ms number was reported as a result once. A forward-filled bin with no new quote
+        has a return of exactly zero, so on a ~1-update/s feed almost every surviving pair is
+        (moved, did-not-move) and the correlation collapses mechanically.
+        """
+        rng = np.random.default_rng(11)
+        n = 20_000
+        move = rng.standard_normal(n)
+        # Same series twice, b lagged by 3 bins: a PERFECT relationship by construction.
+        a = move.copy()
+        b = np.concatenate([np.zeros(3), move[:-3]])
+        # Dense: measured, strong, and the lead is recovered.
+        dense = sc.xcorr_peak(a, b, max_lag=30, min_bins=10)
+        self.assertGreater(dense["corr"], 0.99)
+        self.assertAlmostEqual(dense["lead_ms"], 3 * sc.BIN_US / 1000.0)
+        self.assertLess(dense["zero_share"], 0.01)
+        # Now thin BOTH series to 4% of bins, the way a 1-update/s feed on a 10 ms grid is.
+        keep = rng.random(n) < 0.04
+        a_sparse, b_sparse = np.where(keep, a, 0.0), np.where(keep, b, 0.0)
+        sparse = sc.xcorr_peak(a_sparse, b_sparse, max_lag=30, min_bins=10)
+        self.assertTrue(np.isnan(sparse["corr"]), "a 96%-zero grid must not yield a number")
+        self.assertIn("void", sparse)
+        self.assertGreater(sparse["zero_share"], 0.9)
+        # And with the guard lifted it would have read as a WEAK relationship, not a broken one.
+        unguarded = sc.xcorr_peak(
+            a_sparse, b_sparse, max_lag=30, min_bins=10, max_zero_share=1.0
+        )
+        self.assertLess(unguarded["corr"], 0.5, "this is the misleading number the guard blocks")
 
     def test_a_leading_series_reports_a_positive_lead(self):
         # b is a delayed copy of a by 5 bins, so a LEADS b by 5 bins = 50 ms.

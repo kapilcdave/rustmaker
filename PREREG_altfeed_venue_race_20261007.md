@@ -127,3 +127,52 @@ and a run with no `how:"amend"` rows has not exercised the feature.
   fill and never a fill claim.
 * The Kalshi tape carries no close time, so the replay attributes an event to the market that
   updated most recently — held identical to `latency_arb.py` so the two numbers compare.
+
+## Amendments, declared 2026-10-07 19:0xZ — BEFORE any result was scored
+
+No output of `altfeed_score.py` or `altfeed_taker.py` had been read when these were written.
+
+**A1 — crypto.com is excluded, and the frozen window is the intersection of the remaining nine
+readers.** The original document specifies no window rule, no venue-exclusion rule and no
+reconnect handling, so this was undefined rather than decided. Over the 10h09m capture
+crypto.com logged **449 disconnects** — one every ~79 s — against kraken 9, okx 6, gemini 6,
+cb_ex 5, hyperliquid 3, cb_adv 2. Per `a-multi-reader-capture-is-voided-by-its-weakest-socket`
+the window must be the interval in which all retained readers were simultaneously speaking, and
+including a socket that cycles every 79 s reduces that intersection to 79-second shards.
+Reconnect-and-splice stays forbidden.
+
+The exclusion is **outcome-independent**, which is what makes it safe to declare now rather
+than after: crypto.com is 291k of 14.23M rows (**2.0%**, inside the ≤10% tolerance that memory
+sets for exclude-and-report), and its data delay was already measured at **87.5 ms against a
+16.8 ms handshake** (5x) in `FINDINGS_altfeed_index_path_20261007.md` §2, so it cannot win a
+race event on any asset and dropping it cannot move D1's leader for any asset.
+
+**A2 — the capture is 10h09m, not 12h.** Stopped 19:04:43Z (started 08:55:08Z), gzip verified,
+216,591,056 bytes, 14,627,339 quotes, 0 dropped, 0 silent cells.
+
+> **A2-corrected, same day, from the log rather than from inference.** A2 first recorded this stop
+> as "by operator instruction" and the exit as "rc=0". Neither is what happened, and both were
+> artifacts:
+> * `capture.log:1635` reads **`ctrl-c`**, the probe's own `tokio::signal::ctrl_c` branch, at
+>   19:04:43Z — the exact moment the harness killed the `ssh` wrapper that had launched the job.
+>   `setsid nohup ./script &` inside an `ssh` command does **not** leave a new session, so SIGINT
+>   reached the capture. **The collector behaved correctly and said so; the launch was wrong.**
+>   Fixed: `setsid -f` (forks unconditionally), documented at the top of `altfeed_capture.sh`.
+> * The logged `rc=0` was the supervisor's bug, not the binary's status: `echo "rc=$?"` ran
+>   `$(date)` first, and a command substitution **resets `$?`**. So the log reported the date's
+>   exit code. Fixed by capturing `rc=$?` on its own line.
+>
+> This does not change A2's conclusion — 10h09m with both sessions inside it, no splice — but
+> "stopped on instruction, rc=0" would have read as a healthy voluntary stop and hidden a launch
+> defect that will silently truncate every future overnight run.
+> [[a-restart-supervisor-needs-backoff-or-it-becomes-a-hammer]] is the sibling trap. The 1-minute fragment the
+supervisor opened on restart (`altfeed_1791399893081.csv.gz`) was deleted unread, so no splice
+exists. Both a US and an Asia session are still inside the window, which was the stated reason
+for 12 h.
+
+**A3 — DEVIATION: D3's spot-vs-index leg has 2 h, not 12 h.** The run block specifies
+`probe --minutes 720 --index`; what actually ran was `--minutes 120` (09:18Z -> 11:18Z, 7,200 s,
+294,246 prints, rc clean). The Kalshi **book** side is unaffected and covers the whole window
+via the pre-existing hourly `gate_probe.sh` tapes (06:14Z onward, continuous, no gap). So D1,
+D2 and D4 run on the full window; **D3's index comparison is one session and is reported as
+underpowered for the Asia leg.**

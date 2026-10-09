@@ -250,6 +250,13 @@ def main():
     # 5.44 and 6.0; pass them explicitly to reproduce the older run.
     ap.add_argument("--create-us", type=int, default=2_900)
     ap.add_argument("--feed-us", type=int, default=5_700)
+    ap.add_argument(
+        "--exclude-venues",
+        nargs="*",
+        default=[],
+        help="drop these venues at load, so they cannot vote in the median signal nor count "
+        "toward --min-venues (PREREG_altfeed_venue_race_20261007.md A1).",
+    )
     ap.add_argument("--json")
     args = ap.parse_args()
 
@@ -258,6 +265,21 @@ def main():
     kalshi = read_kalshi(expand(args.kalshi))
     if not feeds:
         sys.exit("no quotes in the altfeed capture")
+    if args.exclude_venues:
+        drop = set(args.exclude_venues)
+        missing = drop - {v for (_a, v) in feeds}
+        if missing:
+            sys.exit(f"--exclude-venues names venues not in the capture: {sorted(missing)}")
+        n_all = sum(len(a) for a in feeds.values())
+        n_drop = sum(len(a) for k, a in feeds.items() if k[1] in drop)
+        feeds = {k: a for k, a in feeds.items() if k[1] not in drop}
+        print(
+            f"EXCLUDED {sorted(drop)}: {n_drop:,} of {n_all:,} rows "
+            f"({100.0 * n_drop / n_all:.2f}%) dropped before scoring.",
+            file=sys.stderr,
+        )
+        if not feeds:
+            sys.exit("every venue was excluded")
     if not kalshi:
         sys.exit("no Kalshi touch rows: the tape must come from `kalshi-mm15 probe`")
 

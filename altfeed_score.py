@@ -230,9 +230,9 @@ def q(a, *fracs):
     return [float(x) for x in np.quantile(a, fracs)]
 
 
-def grid(recv_us, px, t0, n):
+def grid(recv_us, px, t0, n, bin_us=None):
     """Last price at or before each bin edge, forward-filled; NaN before the first observation."""
-    idx = np.searchsorted(recv_us, t0 + np.arange(n) * BIN_US, side="right") - 1
+    idx = np.searchsorted(recv_us, t0 + np.arange(n) * (bin_us or BIN_US), side="right") - 1
     out = np.full(n, np.nan)
     ok = idx >= 0
     out[ok] = px[idx[ok]]
@@ -255,7 +255,11 @@ def _ccf(u, v, max_lag):
     return full[np.arange(-max_lag, max_lag + 1) % size]
 
 
-def xcorr_peak(a, b, max_lag=MAX_LAG_BINS, min_bins=200):
+MAX_ZERO_SHARE = 0.60
+
+
+def xcorr_peak(a, b, max_lag=MAX_LAG_BINS, min_bins=200, bin_us=None,
+               max_zero_share=MAX_ZERO_SHARE):
     """How far `a` leads `b`, in ms, at the lag where corr(a[t], b[t+lag]) peaks.
 
     `lead_ms > 0` means `a` moves FIRST and `b` follows it: if `b` is a copy of `a` delayed by
@@ -277,6 +281,22 @@ def xcorr_peak(a, b, max_lag=MAX_LAG_BINS, min_bins=200):
     """
     x = np.nan_to_num(np.asarray(a, dtype=float))
     y = np.nan_to_num(np.asarray(b, dtype=float))
+    # ⛔ The guard this function exists to carry. A forward-filled bin with no new quote has a
+    # return of exactly zero, so on a feed that updates ~1/s a 10 ms grid is ~96% zeros, almost
+    # every surviving pair is (moved, did-not-move), and the correlation collapses toward zero
+    # MECHANICALLY. Measured 2026-10-07 on DOGE/ETH/ZEC spot against the CF index — the same
+    # series, the index being computed from those very venues:
+    #     10 ms bins: 87-96% zero -> corr 0.05-0.09
+    #      250 ms   : 20-61% zero -> corr 0.29-0.48
+    #        5 s    : 0.5-10% zero -> corr 0.84-0.96
+    # The first row is not a weak relationship, it is a broken estimator, and it was reported as
+    # a result once. Refuse to return a correlation computed on a grid that sparse.
+    zero_share = float(max(np.mean(x == 0), np.mean(y == 0)))
+    if zero_share > max_zero_share:
+        return {"corr": float("nan"), "lead_ms": float("nan"), "n_bins": 0,
+                "zero_share": zero_share,
+                "void": f"{zero_share:.0%} of bins have no price change at "
+                        f"{(bin_us or BIN_US)/1000:.0f} ms; coarsen the bin"}
     ones = np.ones(len(x))
     ix, iy = (x != 0).astype(float), (y != 0).astype(float)
     sxy = _ccf(x, y, max_lag)
@@ -288,10 +308,13 @@ def xcorr_peak(a, b, max_lag=MAX_LAG_BINS, min_bins=200):
         corr = (n * sxy - sx * sy) / np.sqrt(vx * vy)
     corr[(n < min_bins) | (vx <= 0) | (vy <= 0)] = np.nan
     if not np.isfinite(corr).any():
-        return {"corr": float("nan"), "lead_ms": float("nan"), "n_bins": 0}
+        return {"corr": float("nan"), "lead_ms": float("nan"), "n_bins": 0,
+                "zero_share": zero_share, "void": "no lag had enough paired bins"}
     k = int(np.nanargmax(corr))
     lag = k - max_lag
-    return {"corr": float(corr[k]), "lead_ms": lag * BIN_US / 1000.0, "n_bins": int(n[k])}
+    return {"corr": float(corr[k]), "lead_ms": lag * (bin_us or BIN_US) / 1000.0,
+            "n_bins": int(n[k]), "zero_share": zero_share,
+            "bin_ms": (bin_us or BIN_US) / 1000.0}
 
 
 # --------------------------------------------------------------------------- the race
@@ -508,6 +531,15 @@ def main():
     ap.add_argument("--kalshi", nargs="*", default=[], help="tape_*.csv.gz from `kalshi-mm15 probe`")
     ap.add_argument("--index", nargs="*", default=[], help="index_*.jsonl.gz from `probe --index`")
     ap.add_argument("--move-bps", type=float, default=MOVE_BPS)
+    ap.add_argument(
+        "--exclude-venues",
+        nargs="*",
+        default=[],
+        help="drop these venues at load, so they leave the reference median, the race and the "
+        "lead together. A socket that reconnects every ~80 s is in USD_VENUES and would "
+        "otherwise corrupt the reference it is being scored against "
+        "(PREREG_altfeed_venue_race_20261007.md A1).",
+    )
     ap.add_argument("--json", help="write the full report here")
     args = ap.parse_args()
 
@@ -515,12 +547,43 @@ def main():
     feeds, notes = read_altfeed(expand(args.altfeed))
     if not feeds:
         sys.exit("no quotes in the capture")
+    if args.exclude_venues:
+        drop = set(args.exclude_venues)
+        seen = {v for (_a, v) in feeds}
+        missing = drop - seen
+        if missing:
+            sys.exit(f"--exclude-venues names venues not in the capture: {sorted(missing)}")
+        kept = {k: v for k, v in feeds.items() if k[1] not in drop}
+        n_drop = sum(len(feeds[k]) for k in feeds if k[1] in drop)
+        n_all = sum(len(a) for a in feeds.values())
+        print(
+            f"EXCLUDED {sorted(drop)}: {n_drop:,} of {n_all:,} rows "
+            f"({100.0 * n_drop / n_all:.2f}%) dropped before scoring.",
+            file=sys.stderr,
+        )
+        feeds = kept
+        if not feeds:
+            sys.exit("every venue was excluded")
     kalshi = read_kalshi(expand(args.kalshi)) if args.kalshi else {}
-    index, keys = read_index(expand(args.index)) if args.index else ({}, [])
+    index, keys, idx_delay, channels = (
+        read_index(expand(args.index)) if args.index else ({}, [], {}, [])
+    )
     if args.index and not index:
         print(f"WARNING: no index values parsed; fields seen in the frames: {keys}", file=sys.stderr)
+    if idx_delay:
+        print(f"settlement index: channels {channels}")
+        print(f"  {'index/channel':34} {'n':>7} {'cadence':>8} {'CF->Kalshi':>11} "
+              f"{'queue':>7} {'Kalshi->us':>11} {'CF->us':>8}")
+        for k in sorted(idx_delay):
+            d = idx_delay[k]
+            print(f"  {k:34} {d['n']:7d} {d['cadence_ms_p50']:8.0f} {d['cf_to_kalshi_ms_p50']:11.1f} "
+                  f"{d['kalshi_queue_ms_p50']:7.1f} {d['kalshi_to_us_ms_p50']:11.1f} "
+                  f"{d['source_to_us_ms_p50']:8.1f}")
+        print()
 
     report = score(feeds, kalshi, index, notes, args.move_bps)
+    report["index_delay_ms"] = idx_delay
+    report["index_channels"] = channels
     brief(report)
     if args.json:
         with open(args.json, "w") as fh:

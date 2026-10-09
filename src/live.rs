@@ -63,6 +63,98 @@ pub struct LiveParams {
     /// 0 = join the touch (mid band). n > 0 = PENNY (PREREG_penny.md): one tick inside the
     /// OTHERS' touch, any band 1-99 c, only when their spread is at least n ticks.
     pub penny_room: i64,
+    /// ⚑ MODEL PRICING. Quote **continuously** off an independent fair value (`fairvalue`)
+    /// instead of gating on the book's width. When set, `penny_room` and `book_residual` play no
+    /// part in the entry decision: the price comes from the settlement index, the strike, the
+    /// time to close and realised vol, and the decision to quote a side is the model's own
+    /// refusal rule (bid only at or above `fair − margin`), which carries no width term.
+    ///
+    /// Three measurements say the width gate is the wrong control on this panel:
+    /// 1. **It buys nothing.** Real-print maker gross is flat at +0.249 / +0.264 / +0.252 /
+    ///    +0.240 / +0.244 c/ct across 0-1, 1-2, 2-3, 3-5, 5-10 c of spread, on 8,038,551 prints
+    ///    (`kalshi-scalp/FINDINGS_real_print_ledger.md`). There is no width gradient to gate on.
+    ///    The gradient this gate was built from came from a fill model that overstated adverse
+    ///    selection **5.17×** (7.343 sim vs 1.421 real).
+    /// 2. **It costs the exits.** See `exit_ignore_room` below: a 4c mid-band spread occurs in
+    ///    **5-6% of states**, so the gate silences ~94% of the seat, and the −$6.18 settlement
+    ///    loss of the 2026-10-07 armed session was in positions whose profitable exit print did
+    ///    arrive (95.5% of them) while we had no order resting there.
+    /// 3. **A two-sided quote with no model is blind to a mispricing by construction** — at an
+    ///    even side split the calibration coefficient is exactly zero
+    ///    (`kalshi-scalp/FINDINGS_tail_seller_surface.md`). Only an independent price can decide
+    ///    to quote one side and refuse the other.
+    pub fair: bool,
+    /// Cents of margin **on top of** the derived latency toll `fairvalue::latency_margin_c`,
+    /// i.e. the required profit and the maker fee. The toll itself is not a parameter: it is
+    /// `phi(z)·sigma·sqrt(reaction)/sigma_eff`, ~0.147 c at the money at `tau = 900 s` for our
+    /// measured 11.6 ms reaction, and it is largest at the money — the opposite shape to a
+    /// width gate.
+    pub fair_margin_c: f64,
+    /// Our index-to-book reaction time, seconds, which is what the latency toll is computed
+    /// from. Measured 11.6 ms for post and 10.6 ms for cancel
+    /// (`kalshi-15m-crypto-competitors-react-twice-as-fast-as-the-ohio-box`). Raise it, never
+    /// lower it below a measurement: this term is the seat's whole cost of being stale.
+    pub fair_reaction_s: f64,
+    /// Cents the quoted centre shifts per whole contract of inventory — A-S's reservation-price
+    /// term, the half of A-S whose parameter is identified here. The spread term is NOT used:
+    /// its `k` is unidentified on this venue (hazard ratio inverts past 8 s of resting, `k`
+    /// negative in 3 of 8 age bins, implied optimum spans 1.65c to undefined and brackets what
+    /// the venue already quotes) and it collapses to `1/k` γ-free on a 1c lattice anyway
+    /// (`as-arrival-decay-k-is-not-identified`).
+    pub fair_skew_c: f64,
+    /// Vol floor and ceiling, as annualised fractions, clamped around the realised EWMA. The vol
+    /// is the one input that can drive fair value to 0 or 100 and quote a whole ladder at the
+    /// wings, so it is bounded rather than trusted. 27% is the measured 15M conditional vol.
+    pub fair_vol_floor: f64,
+    pub fair_vol_ceil: f64,
+    /// EWMA half-life in samples (= seconds at the 1 s sampling grid) and the minimum samples
+    /// before the vol has an opinion at all. Below the minimum, no model quote is produced.
+    pub fair_vol_half_life: f64,
+    pub fair_vol_min_samples: u32,
+    /// Refuse to price when the last index frame is older than this (µs). The index is 26-73 ms
+    /// late by construction (`FINDINGS_altfeed_index_path_20261007.md`); this catches a stalled
+    /// or unsubscribed channel, which would otherwise leave the level anchored in the past while
+    /// spot carried it forward on a return the index never confirmed.
+    pub fair_max_index_age_us: i64,
+    /// Requote threshold in cents: amend only when the model price has moved at least this far
+    /// from the resting price. 0 would chase every index tick at 10 tokens an amend. At the
+    /// measured 2.83 c/bp this is also the quote's resolution in spot terms.
+    pub fair_requote_c: f64,
+    /// ⚑ How stale our index level is, as a level error in basis points, and what the seat can
+    /// earn, in cents. Together these are the binding gate.
+    ///
+    /// **The required margin is `sigma`-free** (measured 2026-10-07,
+    /// `FINDINGS_fair_value_precision_wall_20261007.md`): `delta = 100·phi(z)/sigma_eff` while the
+    /// level error is `sigma·sqrt(staleness)`, so the product is
+    /// `100·phi(z)·sqrt(staleness/(tau−40))` with no volatility term at all. It cannot be improved
+    /// by a calmer asset, a calmer hour, or a better vol model — only by freshness and by time
+    /// left. Measured staleness (`transport + gap/2`, the cycle average): **138 ms** on the 200 ms
+    /// indices (BTC ETH SOL XRP DOGE), **538 ms** on the 1 s ones (BNB HYPE NEAR ZEC), giving a
+    /// level error of **0.15-0.42 bp** and **0.40-1.54 bp** respectively.
+    ///
+    /// **`--fair-gross-c` declares WHICH INCOME is being claimed**, and the answer is now measured:
+    /// - **0.25 (default)** — the real-print gross held to settlement. At the money this costs
+    ///   **0.65 c against 0.25 c, 2.6× over**, and admits only `|z|` outside **8.3c / 91.7c** at
+    ///   `tau` = 900. Conservative, and the honest default.
+    /// - ⛔ **1.00 — REFUTED, do not set** (`../kalshi-scalp/FINDINGS_pair_rate_20261007.md`,
+    ///   8.04M real prints, 63 day clusters). The paired round trip does **not** net 1.00 c. The
+    ///   pair rate is achievable — **99.14%** at a capture ceiling that does not exist, against a
+    ///   97.3% break-even — but **c/pair falls as the pair rate rises**: +2.12 c/pair at an 85%
+    ///   rate, **−1.27 c/pair at 99%**. Best of 11 scored cells is **−1.36 c/opening**, and
+    ///   **0 of 8 series are positive in any cell**. The mechanism: `|q| <= 1` on a 15-minute
+    ///   binary sells a 1.3 c spread against a ~23%-probability **−46 c** tail, and crossing out
+    ///   recovers only 0.52 c of a 10.5 c loss because the naked loss is already realised in the
+    ///   price. The exit policy relocates the loss; it does not reduce it.
+    ///
+    /// So the seat is closed in the **mid band** on all three legs — the width gate it replaced was
+    /// empty, its level precision is fine, and its pair rate is reachable and still does not pay.
+    /// What survives is the wing, where both tolls collapse with `phi(z)`. The armed session said
+    /// the same thing in miniature: pairs +$0.42, settlement-held −$6.18.
+    ///
+    /// `--fair-level-precision-bp 0` disables the level term, asserting the level is known
+    /// exactly. It is not, and such a run is not evidence about a model-priced seat.
+    pub fair_level_precision_bp: f64,
+    pub fair_gross_c: f64,
     /// Join one 15-minute crypto touch only when it remains favorable versus the receipt-clock
     /// midpoint from one second ago. This is the book-only residual control.
     pub book_residual: bool,
@@ -85,6 +177,25 @@ pub struct LiveParams {
     pub pull_amend_ticks: i64,
     /// Backstop only for the post hold after a fill; the `fill` message releases it (see `Mkt`).
     pub fill_hold_us: i64,
+    /// ⚑ AN EXIT IS NOT AN ENTRY. Measured 2026-10-07 on the 544 fills of a −$5.76 armed session:
+    /// pairs earned +$0.42 and every cent of the loss (−$6.18) was in positions held to
+    /// settlement — yet **95.5% of those had a profitable exit print arrive later**, a mean of
+    /// 9,875 contracts through our own break-even at 11.32c better than entry. We were not short
+    /// of a counterparty; we had no order there, because the reducing leg had to clear both entry
+    /// gates: a `penny_room`-tick spread (4c in the mid band, which occurs in 5–6% of states) and
+    /// `stop_before_close_s`, i.e. the first half of a 900 s market. The sports path has always
+    /// exempted the flattening side (`if exiting { sports_ok }`); these three give the crypto seat
+    /// the same, and all default to the old behaviour.
+    ///
+    /// Width gate off for the reducing leg: never require a wide book to get out.
+    pub exit_ignore_room: bool,
+    /// The reducing leg's own close buffer, in seconds. Must stay large enough to cancel safely,
+    /// but 450 s means going silent at a 15-minute market's halfway mark while holding inventory.
+    pub exit_stop_before_close_s: i64,
+    /// Minimum cents of edge an exit may rest at, measured from the opening fill's price: the
+    /// "wait until we are profitable" clamp. Negative = off (rest wherever the touch is, which can
+    /// lock a loss). 0 = never rest through break-even.
+    pub exit_min_edge_c: f64,
     /// Pull the side a spot move of more than this many bps over `spot_window_us` runs into, on
     /// the spot tick itself. 0 = off.
     pub spot_bps: f64,
@@ -203,6 +314,24 @@ struct LiveOrder {
 
 /// Would a clip on this side push the round's summed YES position past the cap? A side that
 /// shrinks |sum| is never blocked, so a round over the cap can always work its way back.
+/// Where a reducing order may rest: never through break-even, and never crossing the others'
+/// touch. `entry_px` is the opening fill's price in PRICE_SCALE units (exact at `--max-pos 1`);
+/// `min_edge_c` below zero disables the clamp and the exit simply chases the touch, which is what
+/// booked a certain loss on a seat built to collect a spread. Walking back to `bid + tick` /
+/// `ask - tick` keeps the order post-only even in a one-tick book.
+fn exit_target(side: usize, target: i64, entry_px: i64, min_edge_c: f64,
+               bid: i64, ask: i64, tick: i64) -> i64 {
+    if min_edge_c < 0.0 || entry_px <= 0 {
+        return target;
+    }
+    let edge = (min_edge_c * 100.0).round() as i64;
+    if side == ASK {
+        target.max(entry_px + edge).max(bid + tick)
+    } else {
+        target.min(entry_px - edge).min(ask - tick)
+    }
+}
+
 /// `user_order` says a fill happened and frees the order slot; the `fill` message carries
 /// `post_position_fp`, the position authority. Posting between the two can quote off a stale
 /// position, which is how NEAR reached +2 on 2026-09-25. Hold until the authority lands, with a
@@ -271,6 +400,14 @@ struct Mkt {
     last_bid: f64,
     last_ask: f64,
     conservative: bool,
+    /// `floor_strike` from the market payload: the settlement index level this contract compares
+    /// against, in index units. On a 15M return-strike market this is the market's OPEN 60-second
+    /// index average, so it is already realised and exact — not an estimate. 0.0 where the
+    /// payload carried none, which is the only thing that disables `--fair` for a market.
+    strike: f64,
+    /// The settlement index this market's series resolves on (`BRTI`, `ETHUSD_RTI`, ...), for
+    /// joining the `cfbenchmarks_value*` stream to a book. Empty for a non-crypto series.
+    index_id: String,
 }
 
 impl Mkt {
@@ -420,6 +557,47 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
         "--amend-only with --pull-amend-ticks 0 would amend a pulled quote to its own price, \
          which is a pull that does nothing"
     );
+    // Same discipline for model pricing: every way for `--fair` to be silently inert is a
+    // start-up failure, because an inert seat and a seat with nothing to quote look identical on
+    // the status line. `fairvalue` returns `None` rather than guessing, so a missing input here
+    // would mean a run that places no orders and reports no error.
+    if p.fair {
+        anyhow::ensure!(p.sports.is_none(),
+            "--fair is crypto-only: a game has no settlement index or strike to price against, \
+             and on sports the width gate is the measured mechanism, not an obstacle");
+        anyhow::ensure!(!spot_assets.is_empty(),
+            "--fair needs a crypto 15M series; none of {:?} maps to a settlement index", p.series);
+        anyhow::ensure!(!p.book_residual,
+            "--fair replaces --book-residual: both compute a price, and --book-residual's is \
+             anchored on the Kalshi mid, which is the thing --fair exists not to read");
+        anyhow::ensure!(p.spot_venues.len() >= p.spot_min_venues.max(1),
+            "--spot-min-venues {} cannot be met by {} venue(s): the model could never anchor a \
+             level and the seat would quote nothing",
+            p.spot_min_venues, p.spot_venues.len());
+        anyhow::ensure!(p.fair_reaction_s > 0.0,
+            "--fair-reaction-ms must be > 0: it is the measured cost of being stale (11.6 ms \
+             index-to-book), and at 0 the margin collapses to --fair-margin-c alone");
+        anyhow::ensure!(p.fair_vol_floor > 0.0 && p.fair_vol_ceil >= p.fair_vol_floor,
+            "--fair-vol-floor must be > 0 and <= --fair-vol-ceil (got {} and {})",
+            p.fair_vol_floor, p.fair_vol_ceil);
+        anyhow::ensure!(p.fair_vol_min_samples > 0,
+            "--fair-vol-min-samples must be > 0, or an unwarmed vol prices the first quotes");
+        // ⛔ Refuse the refuted gross outright. Claiming the paired round trip is what would admit
+        // the mid band, and it is measured not to pay: the pair rate reaches 99.14% against a
+        // 97.3% break-even and c/pair goes NEGATIVE getting there (0 of 8 series positive in 11
+        // cells). A flag that re-opens a closed branch by assertion should not be reachable.
+        anyhow::ensure!(p.fair_gross_c <= 0.40,
+            "--fair-gross-c {} claims an income this seat is measured NOT to earn: the paired \
+             round trip nets -1.27 to +2.25 c/pair by exit policy and is negative per opening in \
+             all 11 cells (kalshi-scalp/FINDINGS_pair_rate_20261007.md). The settlement-held gross \
+             is 0.25 c; values above 0.40 need a NEW pair-rate measurement, not a flag",
+            p.fair_gross_c);
+        // The pricer has no opinion inside the settlement window, so a close buffer below it
+        // would be a buffer the model never reaches.
+        anyhow::ensure!(p.stop_before_close_s as f64 >= crate::fairvalue::SETTLE_AVG_S,
+            "--stop-before-close-s {} is inside the {} s settlement average, where the pricer \
+             has no opinion; raise it", p.stop_before_close_s, crate::fairvalue::SETTLE_AVG_S);
+    }
     fs::create_dir_all(&p.out)?;
     let auth = Arc::new(auth);
     let http = client()?;
@@ -466,7 +644,10 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
             p.spot_window_us / 1_000, p.spot_min_venues
         );
     }
-    let (spot_tasks, spot_dropped) = if p.spot_bps > 0.0 {
+    // `--fair` needs the feed as much as `--spot-bps` does: the model's level is the index
+    // carried forward by the spot return, so without a spot socket `ret_bps` is permanently
+    // `None` and the seat quotes nothing while looking healthy.
+    let (spot_tasks, spot_dropped) = if p.spot_bps > 0.0 || p.fair {
         crate::fastspot::feed(&p.spot_venues, &spot_assets, spot_tx)
     } else {
         (Vec::new(), std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
@@ -478,6 +659,23 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
         .collect();
     let mut spot_pulls = 0u64;
     let mut amends = 0u64;
+    // Model pricing state, per settlement index — outside the reconnect loop because the vol
+    // EWMA takes `fair_vol_min_samples` seconds to warm and a reconnect must not reset it to
+    // "no opinion" and silence the seat.
+    let mut index_tick: HashMap<String, crate::fairvalue::IndexTick> = HashMap::new();
+    let mut index_vol: HashMap<String, crate::fairvalue::Vol> = HashMap::new();
+    // Counters for why a model quote was not produced. A seat that silently stops quoting looks
+    // exactly like a seat with nothing to quote, and these separate the two.
+    let (mut fair_quotes, mut fair_no_index, mut fair_no_vol, mut fair_no_spot, mut fair_no_strike) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut fair_one_sided = 0u64;
+    // Markets the derived gate refused because the two tolls exceed the gross. On this panel at
+    // the measured level precision this is expected to be the large majority of the mid band.
+    let mut fair_below_gross = 0u64;
+    // Requotes driven by a spot tick rather than a Kalshi frame. This counter is the measurement
+    // of whether reading the underlying directly was worth anything: if it stays near zero the
+    // seat is still being driven by Kalshi's own (later) clock.
+    let mut fair_spot_requotes = 0u64;
     let mut orders: HashMap<String, LiveOrder> = HashMap::new();
     let mut markets: HashMap<String, Mkt> = HashMap::new();
     let mut tokens = 900.0f64;
@@ -534,6 +732,23 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
         ws.send(Message::Text(json!({"id": 2, "cmd": "subscribe", "params": {
             "channels": ["fill", "user_orders"]}}).to_string().into())).await?;
         let mut next_id = 3u64;
+        if p.fair {
+            // One command per index id, deliberately: an id the venue does not know rejects its
+            // own command instead of taking the whole subscription down with it.
+            let ids: Vec<String> = markets.values()
+                .filter(|m| !m.index_id.is_empty())
+                .map(|m| m.index_id.clone())
+                .collect::<std::collections::HashSet<_>>().into_iter().collect();
+            anyhow::ensure!(!ids.is_empty(),
+                "--fair needs a crypto 15M series: none of {:?} maps to a settlement index", p.series);
+            for id in &ids {
+                ws.send(Message::Text(json!({"id": next_id, "cmd": "subscribe", "params": {
+                    "channels": ["cfbenchmarks_value", "cfbenchmarks_value_5hz"],
+                    "index_ids": [id]}}).to_string().into())).await?;
+                next_id += 1;
+            }
+            eprintln!("fair: model pricing on, indices {ids:?}");
+        }
         let mut seqs: HashMap<u64, u64> = HashMap::new();
         for m in markets.values_mut() { m.book = None; }
         let mut housekeeping = interval(Duration::from_secs(10));
@@ -629,8 +844,14 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     j.1 = Samples::new(TIMING_CAP);
                     let now_ms = unix_us() / 1_000;
                     // Pull resting orders in markets inside the close buffer; drop closed markets.
+                    // A REDUCING order gets its own, tighter buffer: pulling the only thing that
+                    // can close a position is what turns a 1-ct wing fill into a settlement loss.
                     let late: Vec<String> = orders.values()
-                        .filter(|o| markets.get(&o.ticker).is_some_and(|m| m.close_unix_ms - now_ms < p.stop_before_close_s * 1_000))
+                        .filter(|o| markets.get(&o.ticker).is_some_and(|m| {
+                            let reducing = (o.side == ASK && m.pos_fp > 0) || (o.side == BID && m.pos_fp < 0);
+                            let buffer = if reducing { p.exit_stop_before_close_s } else { p.stop_before_close_s };
+                            m.close_unix_ms - now_ms < buffer * 1_000
+                        }))
                         .map(|o| o.coid.clone()).collect();
                     for c in late { request_cancel(&http, &auth, &done_tx, &mut orders, &c, p.exchange_index, &mut cancels); }
                     let before = markets.len();
@@ -688,7 +909,7 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     if Instant::now() >= deadline { break 'outer; }
                     continue;
                 }
-                sp = spot_rx.recv(), if p.spot_bps > 0.0 => {
+                sp = spot_rx.recv(), if p.spot_bps > 0.0 || p.fair => {
                     let Some(ev) = sp else { continue };
                     // A venue dropping out silently shrinks the median the pull votes on, so the
                     // lifecycle note is journalled even though the quotes are not: one row per
@@ -699,6 +920,69 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     }
                     spot.apply(&ev);
                     let crate::fastspot::Event::Q(q) = ev else { continue };
+                    // ⚑ Reprice on the SPOT tick, which is the fastest clock we have. Waiting
+                    // for the next Kalshi frame would price off a feed that reaches us 5.7 ms
+                    // after the venue stamps it and 26-73 ms after CF computes the index
+                    // (`FINDINGS_altfeed_index_path_20261007.md`) — i.e. it would throw away the
+                    // whole reason this seat can quote continuously. At the measured 2.83 c/bp a
+                    // few bps of unmodelled spot move is more than the entire margin.
+                    if p.fair {
+                        if let Some(series) = asset_series.get(q.asset) {
+                            let prefix = format!("{series}-");
+                            let tick = index_tick.get(&mk_index_id(series)).copied();
+                            let sigma = index_vol.get(&mk_index_id(series)).and_then(|v| v.sigma(
+                                p.fair_vol_min_samples,
+                                crate::fairvalue::annual_to_per_sqrt_s(p.fair_vol_floor),
+                                crate::fairvalue::annual_to_per_sqrt_s(p.fair_vol_ceil),
+                            ));
+                            // `moves`: (coid, new price). Collected before any mutation so the
+                            // borrow of `markets` ends before `request_amend` takes `orders`.
+                            let mut moves: Vec<(String, i64)> = Vec::new();
+                            if let (Some(tk), Some(sigma)) = (tick, sigma) {
+                                if q.recv_us - tk.recv_us <= p.fair_max_index_age_us {
+                                    let ret = spot.ret_bps(q.asset, q.recv_us,
+                                        (q.recv_us - tk.source_us).max(1),
+                                        p.spot_max_age_us, p.spot_min_venues);
+                                    for (t, m) in markets.iter().filter(|(t, _)| t.starts_with(&prefix)) {
+                                        let tau_s = (m.close_unix_ms - q.recv_us / 1_000) as f64 / 1_000.0;
+                                        if m.strike <= 0.0 || m.last_bid <= 0.0 || m.last_ask <= 0.0 { continue }
+                                        let Some(level) = ret.and_then(|r| crate::fairvalue::anchored_level(&tk, r)) else { continue };
+                                        let Some(fv) = crate::fairvalue::digital_cents(level, m.strike, tau_s, sigma) else { continue };
+                                        let Some((ok, need)) = crate::fairvalue::quotable(
+                                            level, m.strike, tau_s, sigma, p.fair_reaction_s,
+                                            p.fair_level_precision_bp, p.fair_gross_c) else { continue };
+                                        if !ok { continue }
+                                        let (b, a) = ((m.last_bid * 100.0).round() as i64, (m.last_ask * 100.0).round() as i64);
+                                        let want = crate::fairvalue::pair(fv, m.pos_fp,
+                                            need + p.fair_margin_c, p.fair_skew_c, b, a, &m.ranges);
+                                        for (idx, px) in [(BID, want.bid), (ASK, want.ask)] {
+                                            let Some(c) = m.slots[idx].clone() else { continue };
+                                            let Some(o) = orders.get(&c) else { continue };
+                                            if o.st != St::Resting || o.remaining_fp != p.clip_fp || o.order_id.is_none() { continue }
+                                            // No price for this side any more: the model now
+                                            // refuses it. An amend cannot say "no quote", so
+                                            // leave it to the Kalshi-frame path to cancel.
+                                            let Some(px) = px else { continue };
+                                            if ((o.price - px).abs() as f64) < p.fair_requote_c * 100.0 { continue }
+                                            moves.push((c, px));
+                                        }
+                                        let _ = t;
+                                    }
+                                }
+                            }
+                            for (c, px) in moves {
+                                if tokens < 10.0 { break }
+                                if request_amend(&http, &auth, &done_tx, &mut orders, &c, px, p.clip_fp, &mut amends) {
+                                    tokens -= 10.0;
+                                    fair_spot_requotes += 1;
+                                }
+                            }
+                        }
+                    }
+                    // Under `--fair` the spot tick has already been used as a price. The
+                    // threshold pull below is the gate `--fair` replaces, and running both would
+                    // gate the seat twice on one signal.
+                    if p.spot_bps <= 0.0 { continue; }
                     let Some(r) = spot.ret_bps(
                         q.asset, q.recv_us, p.spot_window_us, p.spot_max_age_us, p.spot_min_venues,
                     ) else { continue };
@@ -765,6 +1049,26 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     j.row("equity", json!({"session_mtm_c": session, "cumulative_c": cumulative, "venue_cash_plus_net_exposure_c": venue}));
                     eprintln!("[{}s] session {:+.2}c cumulative {:+.2}c (venue cash+net exposure {:.2}c) | posts={} cancels={} amends={} spot_pulls={} rejects={} fills={} group_trips={} undercuts={} resting={}",
                         started.elapsed().as_secs(), session, cumulative, venue.unwrap_or(f64::NAN), posts, cancels, amends, spot_pulls, rejects, fills, group_trips, undercuts, orders.len());
+                    if p.fair {
+                        // Why the model did or did not price, separated: a seat that has stopped
+                        // quoting and a seat with nothing to quote look identical without this.
+                        let vols: Vec<String> = index_vol.iter().map(|(id, v)| {
+                            let s = v.sigma(p.fair_vol_min_samples,
+                                crate::fairvalue::annual_to_per_sqrt_s(p.fair_vol_floor),
+                                crate::fairvalue::annual_to_per_sqrt_s(p.fair_vol_ceil));
+                            match s {
+                                Some(s) => format!("{id}={:.0}%/{}", 100.0 * s * (365.0 * 86_400.0f64).sqrt(), v.samples()),
+                                None => format!("{id}=warming/{}", v.samples()),
+                            }
+                        }).collect();
+                        eprintln!("        fair: priced={fair_quotes} one_sided={fair_one_sided} spot_requotes={fair_spot_requotes} \
+                                   | skipped: below_gross={fair_below_gross} no_index={fair_no_index} no_vol={fair_no_vol} no_spot={fair_no_spot} no_strike={fair_no_strike} \
+                                   | vol {}", vols.join(" "));
+                        j.row("fair_stats", json!({"priced": fair_quotes, "one_sided": fair_one_sided,
+                            "spot_requotes": fair_spot_requotes, "below_gross": fair_below_gross, "no_index": fair_no_index,
+                            "no_vol": fair_no_vol, "no_spot": fair_no_spot, "no_strike": fair_no_strike,
+                            "vol": vols}));
+                    }
                     if p.spot_bps > 0.0 {
                         // The pull votes a median over FRESH venues, so the count of fresh venues
                         // per asset is the gate's real state: fall below --spot-min-venues and
@@ -816,6 +1120,34 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
             }
             let kind = v["type"].as_str().unwrap_or("");
             let m = &v["msg"];
+            // The settlement index carries no `market_ticker`, so it is handled before any of
+            // the per-market arms. Both channels are subscribed and they carry DIFFERENT shapes
+            // (`FINDINGS_altfeed_index_path_20261007.md`): the 5 Hz one has `value_usd` and
+            // `source_ts_ms` at the top level, the 1 Hz one nests CF's payload in a `data`
+            // JSON **string** and has no `source_ts_ms` — its stamp is `data.time`. A reader
+            // that knows only one silently drops the other.
+            if kind.starts_with("cfbenchmarks") {
+                if let Some(id) = m["index_id"].as_str() {
+                    let data: Option<Value> = m["data"].as_str().and_then(|s| serde_json::from_str(s).ok());
+                    let value = m["value_usd"].as_str().and_then(|s| s.parse::<f64>().ok())
+                        .or_else(|| data.as_ref()?["value"].as_str()?.parse::<f64>().ok());
+                    // CF's own stamp, never our receipt: the spot increment is measured from the
+                    // instant CF computed the level, and we are 26-73 ms downstream of it.
+                    let source_ms = m["source_ts_ms"].as_i64()
+                        .or_else(|| data.as_ref().and_then(|d| d["time"].as_str().and_then(rfc3339_us)).map(|us| us / 1_000));
+                    if let (Some(value), Some(ms)) = (value, source_ms) {
+                        let tick = crate::fairvalue::IndexTick {
+                            value, source_us: ms * 1_000, recv_us: now,
+                        };
+                        index_vol.entry(id.to_owned())
+                            .or_insert_with(|| crate::fairvalue::Vol::new(
+                                1_000_000, p.fair_vol_half_life))
+                            .push(tick.source_us, value);
+                        index_tick.insert(id.to_owned(), tick);
+                    }
+                }
+                continue;
+            }
             match kind {
                 "fill" => {
                     fills += 1;
@@ -1021,6 +1353,59 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     && ask - bid <= cfg.max_open_spread_c * 100
                     && mid >= p.mid_lo_c && mid <= p.mid_hi_c;
             }
+            // ⚑ MODEL PRICE. Computed once per market per frame, from the settlement index, the
+            // strike, the time to close and realised vol. Nothing in it reads this book — that
+            // is the whole point (see `LiveParams::fair`). `None` anywhere means no model quote:
+            // the seat goes quiet rather than falling back to the mid, because a fallback to the
+            // mid is what makes a two-sided quote blind to a mispricing.
+            let fair: Option<crate::fairvalue::Pair> = p.fair.then(|| {
+                if mk.strike <= 0.0 || mk.index_id.is_empty() { fair_no_strike += 1; return None; }
+                let Some(tick) = index_tick.get(&mk.index_id) else { fair_no_index += 1; return None };
+                if now - tick.recv_us > p.fair_max_index_age_us { fair_no_index += 1; return None; }
+                let Some(sigma) = index_vol.get(&mk.index_id).and_then(|v| v.sigma(
+                    p.fair_vol_min_samples,
+                    crate::fairvalue::annual_to_per_sqrt_s(p.fair_vol_floor),
+                    crate::fairvalue::annual_to_per_sqrt_s(p.fair_vol_ceil),
+                )) else { fair_no_vol += 1; return None };
+                // The level: exact, in the strike's units, from the index — carried forward by
+                // the median per-venue spot return over exactly [CF's stamp, now]. Per-venue
+                // returns then median is what makes this immune to the USDT/perp basis, and a
+                // basis here would be a ~25c pricing error (see the `fairvalue` module note).
+                let asset = crate::fastspot::asset_of_series(&mk.index_id)
+                    .or_else(|| crate::fastspot::asset_of_series(ticker.split('-').next().unwrap_or("")));
+                let Some(ret_bps) = asset.and_then(|a| spot.ret_bps(
+                    a, now, (now - tick.source_us).max(1), p.spot_max_age_us, p.spot_min_venues,
+                )) else { fair_no_spot += 1; return None };
+                let level = crate::fairvalue::anchored_level(tick, ret_bps)?;
+                let tau_s = (mk.close_unix_ms - now / 1_000) as f64 / 1_000.0;
+                let fv = crate::fairvalue::digital_cents(level, mk.strike, tau_s, sigma)?;
+                // ⚑ The derived entry gate, replacing the width gate. Both tolls carry phi(z),
+                // so this admits a band in |z| — and at the measured ~1 bp of level precision
+                // that band is the wing, not the mid band. A seat refused here is refused
+                // because the model's own resolution is coarser than the income, which is a
+                // statement about the instrument, not about our speed.
+                let (ok, need) = crate::fairvalue::quotable(level, mk.strike, tau_s, sigma,
+                    p.fair_reaction_s, p.fair_level_precision_bp, p.fair_gross_c)?;
+                if !ok { fair_below_gross += 1; }
+                // The margin is the derived toll plus the declared profit/fee. It is
+                // phi(z)-shaped, so the model widens exactly where a width gate had nothing to
+                // say, and collapses in the wing where the width gate would also have widened.
+                let pair = if ok {
+                    crate::fairvalue::pair(fv, mk.pos_fp, need + p.fair_margin_c,
+                        p.fair_skew_c, bid, ask, &mk.ranges)
+                } else {
+                    crate::fairvalue::Pair::default()
+                };
+                if pair.bid.is_some() || pair.ask.is_some() { fair_quotes += 1; }
+                if pair.bid.is_some() != pair.ask.is_some() { fair_one_sided += 1; }
+                j.row("fair", json!({"ticker": ticker, "fv_c": fv, "level": level, "strike": mk.strike,
+                    "quotable": ok, "need_c": need,
+                    "tau_s": tau_s, "sigma_ann": sigma * (365.0 * 86_400.0f64).sqrt(),
+                    "delta_c_per_bp": crate::fairvalue::delta_c_per_bp(level, mk.strike, tau_s, sigma),
+                    "ret_bps": ret_bps, "index_age_ms": (now - tick.recv_us) / 1_000,
+                    "bid": pair.bid, "ask": pair.ask, "their_bid": bid, "their_ask": ask, "mid": mid}));
+                Some(pair)
+            }).flatten();
             // Diagnostic the shadow could not see: another maker improving past our live quote.
             for (i, own) in [(BID, own_bid), (ASK, own_ask)] {
                 let Some(px) = own else { continue };
@@ -1042,10 +1427,34 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 // Sports: the flattening side only needs the game to be quiet; opening also needs
                 // width and the band.
                 let exiting = (i == ASK && mk.pos_fp > 0) || (i == BID && mk.pos_fp < 0);
-                let mut want = if p.sports.is_some() {
+                let fair_side = fair.and_then(|f| if i == BID { f.bid } else { f.ask });
+                let mut want = if p.fair {
+                    // Continuous: no width term, no `penny_room`, no residual. The only entry
+                    // condition is that the model produced a price for THIS side — which is the
+                    // refusal rule, and is how the seat goes one-sided on a disagreement. The
+                    // close buffers still apply: they are risk controls, not entry gates, and
+                    // `tau <= 60 s` is also where the pricer itself stops having an opinion.
+                    let close_ok = if exiting {
+                        mk.close_unix_ms - now / 1_000 > p.exit_stop_before_close_s * 1_000
+                    } else {
+                        open_ok
+                    };
+                    fair_side.is_some() && close_ok
+                } else if p.sports.is_some() {
                     if exiting { sports_ok } else { sports_open }
                 } else if p.penny_room > 0 {
-                    open_ok && ask - bid >= p.penny_room * tick && mid > 1.0 && mid < 99.0
+                    let in_band = mid > 1.0 && mid < 99.0;
+                    if exiting {
+                        // See `exit_ignore_room`: the reducing leg keeps quoting into a tight book
+                        // and through the second half of the market, because that is where the
+                        // counterparty actually was.
+                        let room_ok = p.exit_ignore_room || ask - bid >= p.penny_room * tick;
+                        let close_ok = mk.close_unix_ms - now / 1_000
+                            > p.exit_stop_before_close_s * 1_000;
+                        room_ok && close_ok && in_band
+                    } else {
+                        open_ok && ask - bid >= p.penny_room * tick && in_band
+                    }
                 } else {
                     postable
                 };
@@ -1069,10 +1478,24 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     let (g_other, t_other) = exposure_elsewhere.unwrap_or((0, 0));
                     if g_other + this > cfg.max_game_fp || t_other + this > cfg.max_total_fp { want = false; }
                 }
-                let toxic = if i == ASK { mom > p.mom_pull_c || bsz as f64 / tot > p.thin_pull }
-                            else { -mom > p.mom_pull_c || asz as f64 / tot > p.thin_pull };
+                // Under `--fair` the momentum half of this gate is dropped and the thin-side half
+                // is kept, because they are not the same kind of signal. `mom` is the Kalshi
+                // mid's own 1 s change — a lagging restatement of the spot move the model has
+                // already priced from upstream of Kalshi's publisher — and gating a model price
+                // on a cruder copy of its own input is `gate-on-signal-over-cost-is-an-anti-gate`.
+                // Book imbalance is genuinely orthogonal: `fairvalue` has no book term at all.
+                let toxic = if p.fair {
+                    if i == ASK { bsz as f64 / tot > p.thin_pull } else { asz as f64 / tot > p.thin_pull }
+                } else if i == ASK {
+                    mom > p.mom_pull_c || bsz as f64 / tot > p.thin_pull
+                } else {
+                    -mom > p.mom_pull_c || asz as f64 / tot > p.thin_pull
+                };
                 if toxic { want = false; }
-                if want && p.spot_bps > 0.0 {
+                // Likewise the spot pull: it is a threshold on exactly the quantity the model
+                // integrates continuously, and the refusal rule already acts on it with a price
+                // instead of a binary. Running both gates the seat twice on one signal.
+                if want && p.spot_bps > 0.0 && !p.fair {
                     let series = ticker.split('-').next().unwrap_or("");
                     if let Some(r) = crate::fastspot::asset_of_series(series).and_then(|a| {
                         spot.ret_bps(a, now, p.spot_window_us, p.spot_max_age_us, p.spot_min_venues)
@@ -1086,6 +1509,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                     (false, true) => bid,
                     (false, false) => ask,
                 };
+                // The model's price, already on the grid and already clamped post-only inside
+                // the others' touch by `fairvalue::pair`.
+                if let Some(px) = fair_side { target = px; }
                 if let Some(cfg) = &p.sports {
                     // Inside only when there is room for both of our quotes plus a tick; else join.
                     if ask - bid < cfg.penny_min_c * 100 { target = if i == BID { bid } else { ask }; }
@@ -1099,6 +1525,9 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                         // Post-only must not cross the others' opposite touch.
                         target = if i == ASK { target.max(bid + tick) } else { target.min(ask - tick) };
                     }
+                }
+                if p.penny_room > 0 && exiting {
+                    target = exit_target(i, target, mk.entry_px, p.exit_min_edge_c, bid, ask, tick);
                 }
                 if p.book_residual {
                     want &= anchor.is_some_and(|value| book_residual_allows(i, target, value));
@@ -1115,6 +1544,12 @@ pub async fn run(auth: Auth, p: LiveParams) -> Result<String> {
                 match cur {
                     Some(o) if matches!(o.st, St::PendingCancel | St::PendingNew | St::PendingAmend) => continue,
                     Some(o) if want && o.price == target => continue,
+                    // A model price moves continuously, so exact equality would chase every index
+                    // tick at 10 tokens an amend: 300 tokens/s is 30 amends/s for the whole book.
+                    // Hold the quote until the model has moved `fair_requote_c`. At the measured
+                    // 2.83 c/bp this threshold is also the quote's resolution in spot terms.
+                    Some(o) if want && p.fair && p.fair_requote_c > 0.0
+                        && ((o.price - target).abs() as f64) < p.fair_requote_c * 100.0 => continue,
                     // Untouched order, new price: one amend (keeps order_id) instead of two legs.
                     // A partly filled order is cancelled instead: amend's `count` semantics on a
                     // partial fill are unmeasured.
@@ -1275,7 +1710,13 @@ fn apply_sports(
             quotable += 1;
         }
         let close = m["close_time"].as_str().and_then(rfc3339_us).map_or(i64::MAX / 4, |c| c / 1_000);
-        markets.insert(t.clone(), Mkt { close_unix_ms: close, ranges: price_ranges(m), game, parent: *parent, conservative: true, ..Default::default() });
+        markets.insert(t.clone(), Mkt {
+            close_unix_ms: close, ranges: price_ranges(m), game, parent: *parent, conservative: true,
+            strike: m["floor_strike"].as_f64().unwrap_or(0.0),
+            index_id: crate::fairvalue::index_id_of_series(
+                t.split('-').next().unwrap_or("")).unwrap_or_default(),
+            ..Default::default()
+        });
         new.push(t);
     }
     j.row("sports_markets", json!({"added": new.len(), "dropped": gone.len(), "total": markets.len(), "quotable": quotable}));
@@ -1522,6 +1963,13 @@ fn pull_price(ranges: &[(i64, i64, i64)], side: usize, price: i64, ticks: i64) -
     px
 }
 
+/// The settlement index id for a series ticker, for the spot-tick reprice path, which has an
+/// asset in hand rather than a market. Empty for a non-crypto series, which never matches a
+/// subscribed index and so prices nothing.
+fn mk_index_id(series: &str) -> String {
+    crate::fairvalue::index_id_of_series(series).unwrap_or_default()
+}
+
 fn tick_at(ranges: &[(i64, i64, i64)], px: i64) -> i64 {
     ranges.iter().find(|(a, b, _)| *a <= px && px < *b)
         .or_else(|| ranges.last().filter(|(_, b, _)| px == *b))
@@ -1537,7 +1985,13 @@ async fn refresh_markets(http: &reqwest::Client, series: &[String], markets: &mu
         for m in body["markets"].as_array().into_iter().flatten() {
             let (Some(t), Some(c)) = (m["ticker"].as_str(), m["close_time"].as_str().and_then(rfc3339_us)) else { continue };
             if c / 1_000 > now_ms && !markets.contains_key(t) {
-                markets.insert(t.to_owned(), Mkt { close_unix_ms: c / 1_000, ranges: price_ranges(m), ..Default::default() });
+                markets.insert(t.to_owned(), Mkt {
+                    close_unix_ms: c / 1_000, ranges: price_ranges(m),
+                    strike: m["floor_strike"].as_f64().unwrap_or(0.0),
+                    index_id: crate::fairvalue::index_id_of_series(
+                        t.split('-').next().unwrap_or("")).unwrap_or_default(),
+                    ..Default::default()
+                });
             }
         }
     }
@@ -1636,6 +2090,37 @@ mod tests {
         // Off the grid at either end.
         assert!(!amendable(&resting(), 0, clip));
         assert!(!amendable(&resting(), PRICE_SCALE, clip));
+    }
+
+    /// An exit must never rest through break-even, and must never cross the others' touch while
+    /// doing so. Both halves have cost money: chasing the touch booked a certain loss on a seat
+    /// built to collect a spread, and a clamp that ignores the touch is a post-only rejection.
+    #[test]
+    fn an_exit_rests_at_a_profit_without_crossing_the_touch() {
+        let tick = 100;                         // 1c in PRICE_SCALE units
+        let (bid, ask) = (4_200, 4_500);        // 42c / 45c, a 3c book
+        let entry = 4_400;                      // we bought YES at 44c
+
+        // Long YES: the penny ask would be 44c, which is break-even. With a 1c floor it moves to 45c.
+        assert_eq!(super::exit_target(super::ASK, ask - tick, entry, 1.0, bid, ask, tick), 4_500);
+        // 0c floor = never through break-even, but break-even itself is allowed.
+        assert_eq!(super::exit_target(super::ASK, ask - tick, entry, 0.0, bid, ask, tick), 4_400);
+        // Clamp off: it chases the touch, even to a locked loss. This is the old behaviour.
+        let entry_high = 4_600;
+        assert_eq!(super::exit_target(super::ASK, ask - tick, entry_high, -1.0, bid, ask, tick), 4_400);
+        assert!(super::exit_target(super::ASK, ask - tick, entry_high, 0.0, bid, ask, tick) >= entry_high);
+
+        // Never cross: in a one-tick book the clamped ask lands ON the ask, not inside the bid.
+        let (tb, ta) = (4_200, 4_300);
+        assert_eq!(super::exit_target(super::ASK, ta - tick, 4_000, 0.0, tb, ta, tick), 4_300);
+
+        // Short YES mirrors: we sold at 44c, the bid exit must be at or below 43c and not cross the ask.
+        assert_eq!(super::exit_target(super::BID, bid + tick, entry, 1.0, bid, ask, tick), 4_300);
+        assert_eq!(super::exit_target(super::BID, bid + tick, 4_000, 0.0, bid, ask, tick), 4_000);
+        assert_eq!(super::exit_target(super::BID, bid + tick, 9_000, 0.0, tb, ta, tick), 4_200);
+
+        // No entry price recorded: nothing to clamp against, leave the target alone.
+        assert_eq!(super::exit_target(super::ASK, ask - tick, 0, 0.0, bid, ask, tick), 4_400);
     }
 
     /// The post hold must end when the position authority lands, not on a timer — but it must

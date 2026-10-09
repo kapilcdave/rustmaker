@@ -8,6 +8,7 @@
 
 mod auth;
 mod book;
+mod fairvalue;
 mod fastspot;
 mod latency;
 mod live;
@@ -205,6 +206,26 @@ async fn main() -> Result<()> {
                 exchange_index: num("--exchange-index", 2.0)? as i64,
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/live".into())),
                 penny_room: num("--penny-room", 0.0)? as i64,
+                // ⚑ Model pricing. See `LiveParams::fair`: quote continuously off an independent
+                // fair value instead of gating on the book's width, which is measured flat.
+                fair: args.iter().any(|a| a == "--fair"),
+                fair_margin_c: num("--fair-margin-c", 0.2)?,
+                // 11.6 ms measured index/print -> our change in the book. Do not lower it below
+                // a measurement: this term IS the cost of being stale.
+                fair_reaction_s: num("--fair-reaction-ms", 11.6)? / 1_000.0,
+                fair_skew_c: num("--fair-skew-c", 1.0)?,
+                fair_vol_floor: num("--fair-vol-floor", 0.10)?,
+                fair_vol_ceil: num("--fair-vol-ceil", 2.00)?,
+                fair_vol_half_life: num("--fair-vol-half-life", 120.0)?,
+                fair_vol_min_samples: num("--fair-vol-min-samples", 60.0)? as u32,
+                fair_max_index_age_us: (num("--fair-max-index-age-ms", 2_000.0)? * 1_000.0) as i64,
+                fair_requote_c: num("--fair-requote-c", 0.1)?,
+                // ⚑ The binding gate; see `LiveParams`. 0.25 bp is the MEASURED level error at
+                // the 138 ms cycle-average staleness of the 200 ms indices (BTC/ETH/SOL/XRP/DOGE)
+                // -- pass 1.0 for the 1 s indices (BNB/HYPE/NEAR/ZEC, 538 ms stale). 0.25 c is the
+                // settlement-held gross; 1.0 claims the paired round trip and needs a pair rate.
+                fair_level_precision_bp: num("--fair-level-precision-bp", 0.25)?,
+                fair_gross_c: num("--fair-gross-c", 0.25)?,
                 book_residual: args.iter().any(|a| a == "--book-residual"),
                 open_cutoff_s: num("--open-cutoff-s", 120.0)? as i64,
                 amend: args.iter().any(|a| a == "--amend"),
@@ -213,16 +234,29 @@ async fn main() -> Result<()> {
                 // Backstop for the post-fill hold. The `fill` message normally releases it in
                 // ~0.14 ms; the old hard-coded 1.5 s cost 1,634 s of silence per run.
                 fill_hold_us: num("--fill-hold-ms", 1500.0)? as i64 * 1_000,
+                // An exit is not an entry. Defaults reproduce the old behaviour exactly:
+                // the reducing leg keeps the room gate, shares the entry close buffer, and
+                // has no break-even clamp. See LiveParams for the measurement.
+                exit_ignore_room: args.iter().any(|a| a == "--exit-ignore-room"),
+                exit_stop_before_close_s: num("--exit-stop-before-close-s",
+                    num("--stop-before-close-s", 120.0)?)? as i64,
+                exit_min_edge_c: num("--exit-min-edge-c", -1.0)?,
                 spot_bps: num("--spot-bps", 0.0)?,
-                // The default venue set is the four that give a true quote feed in one small
-                // frame (Kraken `bbo`, Binance.US `bookTicker`, OKX `bbo-tbt`, Gate
-                // `book_ticker`) plus Coinbase Exchange `ticker`, which is the one the engine
-                // read alone until now. Re-pick this per asset from `altfeed_score.py`: the
-                // point of several venues is that the leader is not the same one everywhere.
+                // MEASURED, not guessed: the venue race over 10h09m and 14.6M quotes
+                // (`FINDINGS_altfeed_venue_race_20261007.md`) kept, by share of race events won,
+                // cb_ex 9/9 assets, gate 8/9, binance_us 7/9, okx 5/9. These four are the top
+                // three on every asset except BNB and ZEC, which also want bitstamp.
+                //
+                // Dropped from the first guess: **kraken, which won 0 of 9** despite having the
+                // highest update rate of any venue on DOGE, NEAR and ZEC (20-22/s). Gemini is
+                // the same shape — 54/s on HYPE and 1/9 assets kept. Update rate is
+                // ANTI-correlated with winning here: their churn is quote flicker, not price
+                // discovery, which is exactly what a race separates and an update count cannot.
+                // Hyperliquid also won 0 of 9 (its data is ~305 ms old on arrival).
                 spot_venues: flag("--spot-venues").map_or_else(
                     || Ok(vec![
-                        fastspot::Venue::Kraken, fastspot::Venue::BinanceUs,
-                        fastspot::Venue::Okx, fastspot::Venue::Gate, fastspot::Venue::CbEx,
+                        fastspot::Venue::CbEx, fastspot::Venue::Gate,
+                        fastspot::Venue::BinanceUs, fastspot::Venue::Okx,
                     ]),
                     |v| fastspot::parse_venues(&v),
                 )?,
@@ -278,6 +312,23 @@ async fn main() -> Result<()> {
                 exchange_index: num("--exchange-index", 0.0)? as i64,
                 out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/sports-live".into())),
                 penny_room: 1,
+                // Model pricing is crypto-only and stays off here. On sports, width IS income:
+                // it rises to a peak at 10-20c (`basketball-maker-width-is-income-but-peaks-at-
+                // ten-cents`) and the spread gate is the measured mechanism of the one positive
+                // maker cell in the corpus (7/7 positive week clusters, `kalshi-sport/README.md`).
+                // There is also no settlement index or strike to price a game against.
+                fair: false,
+                fair_margin_c: 0.0,
+                fair_reaction_s: 0.0,
+                fair_skew_c: 0.0,
+                fair_vol_floor: 0.0,
+                fair_vol_ceil: 0.0,
+                fair_vol_half_life: 0.0,
+                fair_vol_min_samples: 0,
+                fair_max_index_age_us: 0,
+                fair_requote_c: 0.0,
+                fair_level_precision_bp: 0.0,
+                fair_gross_c: 0.0,
                 book_residual: false,
                 open_cutoff_s: 0,
                 amend: !args.iter().any(|a| a == "--no-amend"),
@@ -286,6 +337,13 @@ async fn main() -> Result<()> {
                 // Backstop for the post-fill hold. The `fill` message normally releases it in
                 // ~0.14 ms; the old hard-coded 1.5 s cost 1,634 s of silence per run.
                 fill_hold_us: num("--fill-hold-ms", 1500.0)? as i64 * 1_000,
+                // An exit is not an entry. Defaults reproduce the old behaviour exactly:
+                // the reducing leg keeps the room gate, shares the entry close buffer, and
+                // has no break-even clamp. See LiveParams for the measurement.
+                exit_ignore_room: args.iter().any(|a| a == "--exit-ignore-room"),
+                exit_stop_before_close_s: num("--exit-stop-before-close-s",
+                    num("--stop-before-close-s", 120.0)?)? as i64,
+                exit_min_edge_c: num("--exit-min-edge-c", -1.0)?,
                 // Sports books have no spot underlying, so the whole spot layer stays off.
                 spot_bps: 0.0,
                 spot_venues: Vec::new(),
@@ -689,16 +747,10 @@ fn series_of(ticker: &str) -> String {
     ticker.split('-').next().unwrap_or(ticker).to_owned()
 }
 
-/// The CF Benchmarks index each 15M series settles on, read verbatim out of `rules_primary`
-/// ("the simple average of the sixty seconds of CF Benchmarks' ETHUSDRTI before ...", checked
-/// 2026-10-07 against the live markets of all nine series). BTC's index is named `BRTI`, and
-/// every other asset's is `{ASSET}USD_RTI` in the WebSocket's `index_ids` vocabulary.
+/// The CF Benchmarks index each 15M series settles on. One definition, in `fairvalue`, because
+/// the live quoter joins the same stream to a book.
 fn index_ids(series: &[&str]) -> Vec<String> {
-    series
-        .iter()
-        .filter_map(|s| fastspot::asset_of_series(s))
-        .map(|a| if a == "BTC" { "BRTI".to_owned() } else { format!("{a}USD_RTI") })
-        .collect()
+    series.iter().filter_map(|s| fairvalue::index_id_of_series(s)).collect()
 }
 
 /// Subscribe the settlement index. One command per index id, deliberately: an id the venue does
