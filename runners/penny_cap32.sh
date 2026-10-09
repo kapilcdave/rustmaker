@@ -40,7 +40,20 @@ export ENV_FILE="${ENV_FILE:-$HOME/.config/kalshi/env}"
 
 # The raised budget. SESSION_CAP_C is left equal to it: the per-run cap is not what was killing
 # runs, the CUMULATIVE one was, and a session cap below the seat's own round-sd fires on noise.
-export MAX_DD_C="${MAX_DD_C:-3200}"
+#
+# ⚑ NO LONGER DEFAULTED, 2026-10-09. This line used to read `${MAX_DD_C:-3200}`, so merely
+# launching this runner armed a 3200c real-money budget. On 10-09 a session launched it for an
+# unrelated reason, inherited the 3200c it never chose, and the run lost **$18.13** — 57% of a
+# budget nobody had decided to risk that day. A raised risk budget has to be re-chosen on every
+# launch or it is a loaded gun, so this now refuses rather than assumes.
+if [ -z "${MAX_DD_C:-}" ]; then
+    echo "REFUSING TO START: MAX_DD_C is not set."
+    echo "  This runner used to default it to 3200c. That default cost \$18.13 on 2026-10-09 when a"
+    echo "  session launched the runner without choosing a budget. Pass it explicitly, in cents:"
+    echo "    MAX_DD_C=3200 runners/penny_cap32.sh    # 38.8 round-sd at the 9-series sd of 82.57c"
+    exit 1
+fi
+export MAX_DD_C
 export SESSION_CAP_C="${SESSION_CAP_C:-$MAX_DD_C}"
 
 # A fifth of 3200c is 640c = 7.7 round-sd, comfortably above the 250c (3 round-sd) barrier, so the
