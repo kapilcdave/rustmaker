@@ -135,6 +135,28 @@ while true; do
     band=$([ "$OPEN_MIN_C" = 0 ] && [ "$OPEN_MAX_C" = 100 ] && echo "off" || echo "${OPEN_MIN_C}-${OPEN_MAX_C}c")
     log "run $n: ${SERIES}, spot ${SPOT_BPS} bps, penny room ${PENNY_ROOM}, clip ${CLIP}, open band ${band}, session cap ${cap}c -> $out"
     start=$(date -u +%s)
+    # Pin the MARKET-DATA connection to the fastest verified near-AZ ELB node. 68% of reaction is
+    # waiting for the feed (FINDINGS_signing_and_transport_20261006.md), and DNS round-robin takes
+    # no view: `external-api-ws` serves 8 records split ~0.26 ms local / ~0.85 ms far, and on
+    # 2026-10-09 the live engine had drawn 3.128.58.102 -- the slowest of the eight. A/B with two
+    # --dry-run engines on this box, same binary, same minute, one pinned each way:
+    #     feed_age p50  LOCAL 6487/6493/6641/6451 us   vs   FAR 6957/6909/7131/6943 us
+    # i.e. a flat 0.47 ms, every bucket, no overlap -- ~5% of a ~9 ms reaction, and the only
+    # engineering lever left that is worth anything (local compute is 6-8 us end to end).
+    #
+    # Re-mapped EVERY run, never hardcoded: DNS hands out a rotating subset, and two maps seconds
+    # apart returned near-disjoint sets. The pool behind it is stable though (14/14 nodes first
+    # seen 10-06 still served a valid cert on 10-09), so a pin holds for an 8 h run.
+    # `unset` first so a failed map can never silently re-use the previous run's address, and
+    # pinmap.py prints only what it verified by TLS handshake -- an inconclusive map leaves DNS.
+    #
+    # REST is deliberately left on DNS. A stale WS pin goes blind, and live.rs:1607 cancels
+    # everything before reconnecting, so the seat ends up flat and dark; a stale REST pin would
+    # break that cancel sweep itself. Pin REST (drop --ws-only, worth a further ~0.2 ms) only once
+    # the binary falls back to DNS on a dead address.
+    unset KALSHI_WS_IP
+    eval "$(python3 -I pinmap.py --ws-only 2>>data/live_penny/pinmap.log)" || true
+    log "feed pinned to ${KALSHI_WS_IP:-DNS (map inconclusive)}"
     [ "$AMEND_ONLY" = 1 ] && amend_flag=--amend-only || amend_flag=--amend
     "$BIN" live --armed --env-file "$ENV_FILE" --penny-room "$PENNY_ROOM" "$amend_flag" --spot-bps "$SPOT_BPS" --max-round-net $((2 * MAX_POS)) \
         --clip "$CLIP" --max-pos "$MAX_POS" --group-limit $((12 * CLIP)) \

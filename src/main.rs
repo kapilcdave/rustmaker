@@ -22,6 +22,7 @@ use std::{
     env,
     fs::{self, File},
     io::{BufWriter, Write},
+    net::ToSocketAddrs,
     path::PathBuf,
     sync::mpsc as std_mpsc,
     time::{Duration, Instant},
@@ -457,19 +458,48 @@ fn pinned_ip(var: &str) -> Option<std::net::SocketAddr> {
 }
 
 /// Same as `connect_async`, but dials `KALSHI_WS_IP` when set (SNI/Host stay the URL's hostname).
+///
+/// **A dead pin falls back to DNS rather than failing.** The pinned address is chosen at launch
+/// from the records DNS was serving then, and the engine then holds the connection for up to 8 h.
+/// Without the fallback a node that goes away mid-run would make every reconnect attempt fail
+/// against the same dead address — `live.rs` logs, sleeps 1 s and retries the outer loop forever,
+/// so the seat would sit blind-but-alive for the rest of the run and the supervisor (which only
+/// reacts to an engine that *exits*) would never notice. The pool is in practice stable (14/14
+/// nodes first mapped 2026-10-06 still answered on 10-09), so this is the unlikely branch — but it
+/// is the difference between losing 0.47 ms and losing the run.
 pub(crate) async fn connect_ws<R: tokio_tungstenite::tungstenite::client::IntoClientRequest + Unpin>(
     req: R,
 ) -> Result<(
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     tokio_tungstenite::tungstenite::handshake::client::Response,
 )> {
-    match pinned_ip("KALSHI_WS_IP") {
-        Some(addr) => {
-            let tcp = tokio::net::TcpStream::connect(addr).await?;
-            tcp.set_nodelay(true)?;
-            Ok(tokio_tungstenite::client_async_tls_with_config(req, tcp, None, None).await?)
+    let request = req.into_client_request()?;
+    let Some(addr) = pinned_ip("KALSHI_WS_IP") else {
+        return Ok(connect_async(request).await?);
+    };
+    // `http::Request` is not Clone and the handshake consumes it, so keep a duplicate for the
+    // retry. Re-using the signed headers is fine: the venue's timestamp tolerance is >= +-10 s.
+    let mut dup = tokio_tungstenite::tungstenite::http::Request::builder()
+        .method(request.method().clone())
+        .uri(request.uri().clone());
+    for (name, value) in request.headers() {
+        dup = dup.header(name.clone(), value.clone());
+    }
+    let dup = dup.body(())?;
+
+    let pinned = async {
+        let tcp = tokio::net::TcpStream::connect(addr).await?;
+        tcp.set_nodelay(true)?;
+        Ok::<_, anyhow::Error>(
+            tokio_tungstenite::client_async_tls_with_config(request, tcp, None, None).await?,
+        )
+    };
+    match pinned.await {
+        Ok(x) => Ok(x),
+        Err(e) => {
+            eprintln!("ws pin {addr} unreachable ({e}); falling back to DNS");
+            Ok(connect_async(dup).await?)
         }
-        None => Ok(connect_async(req).await?),
     }
 }
 
@@ -477,7 +507,16 @@ fn client() -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
     if let (Some(addr), Ok(url)) = (pinned_ip("KALSHI_REST_IP"), reqwest::Url::parse(&rest_base())) {
         if let Some(host) = url.host_str() {
-            builder = builder.resolve(host, addr);
+            // The pin goes first and every address DNS currently knows follows it, so a node that
+            // dies mid-run costs one connect attempt instead of the whole REST path. That matters
+            // more here than on the feed: REST is also how a feed break cancels everything
+            // (`live.rs:1607`), so a REST path pinned to a dead address with no fallback would
+            // strand resting orders at exactly the moment the engine went blind.
+            let mut addrs = vec![addr];
+            if let Ok(resolved) = (host, 443u16).to_socket_addrs() {
+                addrs.extend(resolved.filter(|a| a.is_ipv4() && *a != addr));
+            }
+            builder = builder.resolve_to_addrs(host, &addrs);
         }
     }
     builder
