@@ -95,6 +95,43 @@ is a ceiling and not a forecast.
   watchdog alive, no `STOP`, preflight passes its own collateral+cap floor.
 - Stop at any time: `touch /home/admin/trading/kalshi-mm15/STOP`.
 
+## 5a. AMENDMENT 1 — operator authorisation, and the scope it is authorised at
+
+**2026-10-09: the operator was shown §1's capital table and the objection in §5b below, and
+reaffirmed: "lets freaking try it out. 60 bucks we have rn, lets see if it works."** That is the
+decision. It is recorded here rather than inferred, and it authorises **clip 1 on the existing
+$59.52 and the existing 3200c cap** — no deposit, no clip increase.
+
+**What clip 1 on $59.52 buys, stated so the result is not a surprise:**
+- As **income** it is ~**$0.69/day**. It is not the $211/day and cannot be; that needs clip 300.
+- As an **instrument test** it is decisive in ~**2.4 days** (§3). That is the entire reason to run
+  it. A positive here does not pay; it unlocks a *staged* deposit decision at clip 10.
+
+**⚑ Verified before arming, from source rather than assumed:** `live.rs:614-617` reads
+`baseline_equity_c` from `data/live_penny/live_state.json` and writes it **only when the file is
+absent**, so the cumulative baseline (5951.78c) **persists across restarts** and this restart does
+**not** hand the seat a fresh 3200c budget. As of 2026-10-09T~04:10Z equity is 5875.54c, i.e.
+**−76c spent of the 3200c**. A restart therefore inherits 3124c of remaining rope, which is the
+safe behaviour and the opposite of what I assumed when drafting §2.
+
+## 5b. The standing objection, which the operator has overridden
+
+Recorded because a prereg that only contains the case *for* the trade is not a prereg.
+
+1. **This is the penny-jump seat with the drawdown history.** Same binary, box, account, series and
+   supervisor; the only edit is one gate. That seat ran −396.73c / −74.10c / −67.55c and then
+   refused to start on 10-07, is **t = +0.87** on 493 rounds, and went +205c → −62c tonight.
+   Flipping the gate raises its fill rate ~5×, so if the sim is right the cap arrives ~5× sooner.
+2. **`HANDOFF-ASTRA.md` §0 Filter 1 names "penny-jump races" as failing the durability test.**
+   Scaling this to clip 300 would fund precisely what that filter exists to reject. **This A/B is
+   therefore an instrument test only, and a positive result must NOT be read as licensing the
+   $4,926.**
+3. **The +0.2312 c/ct is not this seat's statistic.** It is a population average over every resting
+   maker in narrow books **held to settlement**, with no exit and no queue position. The penny seat
+   is a one-sided improved-quote maker that undercuts (9,023 undercuts tonight) and flattens before
+   close. The tape number has never been measured for *this* seat, which is the whole point of
+   running it — but it also means the prior should not be the tape's +0.2312.
+
 ## 6. What this licenses
 
 Licenses: the `PENNY_ROOM=2` config on the existing budget, and a staged deposit *decision* if §4
