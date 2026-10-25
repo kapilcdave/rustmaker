@@ -598,6 +598,7 @@ dependencies = [
  "base64",
  "flate2",
  "futures-util",
+ "libm",
  "reqwest",
  "ring",
  "rsa",

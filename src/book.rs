@@ -75,6 +75,15 @@ impl Book {
         })
     }
 
+    /// Levels best-first: "yes" = bids high to low, "no" = asks (YES axis) low to high.
+    pub fn levels<'a>(&'a self, side: &str) -> Box<dyn Iterator<Item = (i64, i64)> + 'a> {
+        if side == "yes" {
+            Box::new(self.yes.iter().rev().map(|(p, s)| (*p, *s)))
+        } else {
+            Box::new(self.no.iter().map(|(p, s)| (*p, *s)))
+        }
+    }
+
     pub fn touch(&self) -> Touch {
         let bid = self.yes.last_key_value();
         let ask = self.no.first_key_value();

@@ -1915,7 +1915,7 @@ async fn cancel_everything(http: &reqwest::Client, auth: &Auth, j: &mut Journal,
 /// only a conservative startup / cumulative reference; the running caps use the engine's own
 /// ledger. (Valuing holdings at `total_traded_dollars` instead OVERSTATED them 3x — it counts
 /// turnover — and phantom-tripped the session cap on 2026-09-25.)
-async fn equity_c(http: &reqwest::Client, auth: &Auth, exchange_index: i64) -> Result<f64> {
+pub(crate) async fn equity_c(http: &reqwest::Client, auth: &Auth, exchange_index: i64) -> Result<f64> {
     let bal = signed(http, auth, "GET", "/portfolio/balance", None).await?;
     let shard = bal["balance_breakdown"].as_array().into_iter().flatten()
         .find(|b| b["exchange_index"].as_i64() == Some(exchange_index))

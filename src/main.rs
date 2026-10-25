@@ -11,6 +11,7 @@ mod book;
 mod fairvalue;
 mod fastspot;
 mod latency;
+mod kapmm;
 mod live;
 mod shadow;
 mod residual;
@@ -170,6 +171,40 @@ async fn main() -> Result<()> {
                 ..shadow::Params::default()
             };
             shadow::run(load_auth()?, out, minutes, p).await
+        }
+        Some("kapmm") => {
+            // ARMED Kap maker. REAL orders unless --dry-run / --preflight. The risk budget is
+            // REQUIRED: no default (a-runner-that-hardcodes-a-raised-risk-budget-is-a-loaded-gun).
+            let dry = args.iter().any(|a| a == "--dry-run");
+            let preflight_only = args.iter().any(|a| a == "--preflight");
+            if !dry && !preflight_only && !args.iter().any(|a| a == "--armed") {
+                bail!("kapmm places REAL orders; pass --armed (or --dry-run / --preflight)");
+            }
+            kapmm::DRY.store(dry || preflight_only, std::sync::atomic::Ordering::Relaxed);
+            let num = |name: &str, default: f64| flag(name).map_or(Ok(default), |v| v.parse::<f64>());
+            let params = kapmm::Params {
+                series: flag("--series").unwrap_or_else(|| "KXBTC15M".into()),
+                minutes: flag("--minutes").context("--minutes is required")?.parse()?,
+                max_dd_pct: flag("--max-dd-pct").context("--max-dd-pct is required: the risk budget is the operator's call")?.parse()?,
+                cap_fp: (num("--cap", 5.0)? * book::SIZE_SCALE as f64) as i64,
+                k_c: num("--k-c", 4.0)?,
+                exchange_index: num("--exchange-index", 2.0)? as i64,
+                group_limit: num("--group-limit", 20.0)? as i64,
+                out: PathBuf::from(flag("--out").unwrap_or_else(|| "data/kapmm".into())),
+                belief_listen: flag("--belief-listen").unwrap_or_else(|| "127.0.0.1:47011".into()),
+                sidecar_addr: flag("--sidecar").unwrap_or_else(|| "127.0.0.1:47012".into()),
+                stop_before_close_ms: (num("--stop-before-close-s", 1.0)? * 1_000.0) as i64,
+                max_belief_age_us: (num("--max-belief-age-s", 12.0)? * 1e6) as i64,
+                max_cb_age_us: (num("--max-cb-age-s", 5.0)? * 1e6) as i64,
+                // on by default: `--take-profit-c off` holds every position to settlement
+                take_profit_c: match flag("--take-profit-c").as_deref() {
+                    Some("off") => None,
+                    Some(v) => Some(v.parse::<f64>()?),
+                    None => Some(1.0),
+                },
+                preflight_only,
+            };
+            kapmm::run(load_auth()?, params).await.map(|_| ())
         }
         Some("live") => {
             // ARMED. Requires the explicit flag so it can never start by accident.
