@@ -84,9 +84,21 @@ pub struct Params {
     pub take_profit_c: Option<f64>,
     pub max_cb_age_us: i64,
     pub preflight_only: bool,
+    /// Own-fill GATE mode (`~/kap/PREREG_kap_ownfill_20261025.md`, `~/kap/live/gate_sidecar.py`): the
+    /// sidecar sends, per market and event, an absolute price per side or none; Kap beliefs unused.
+    pub gate: bool,
+    pub max_gate_age_us: i64,
 }
 
 // ------------------------------------------------------------------------------- brain
+/// Gate mode: the sidecar's prices, never improving the others' REAL touch (the model scored an
+/// estimated touch; resting deeper is the conservative direction) and never crossing it.
+fn gate_targets(bid: Option<i64>, ask: Option<i64>, b: Option<i64>, a: Option<i64>) -> (Option<i64>, Option<i64>) {
+    let bid = bid.map(|x| b.map_or(x, |b| x.min(b))).filter(|&x| x >= CENT && a.is_none_or(|a| x < a));
+    let ask = ask.map(|x| a.map_or(x, |a| x.max(a))).filter(|&x| x <= 99 * CENT && b.is_none_or(|b| x > b));
+    (ask, bid)
+}
+
 /// Standard normal CDF.
 fn ndtr(x: f64) -> f64 { 0.5 * libm::erfc(-x / std::f64::consts::SQRT_2) }
 
@@ -213,6 +225,8 @@ struct Mkt {
     /// this market's P&L the last time the position was flat; take-profit judges only the
     /// position opened since, so profit banked by an earlier exit never excuses a new loser
     banked_c: f64,
+    /// gate mode: (bid, ask) in PRICE_SCALE units, None = do not quote that side; and when it arrived
+    gate: Option<(Option<i64>, Option<i64>, i64)>,
 }
 
 impl Mkt {
@@ -495,6 +509,19 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                 r = udp.recv_from(&mut ubuf) => {
                     let Ok((n, _)) = r else { continue };
                     let Ok(v) = serde_json::from_slice::<Value>(&ubuf[..n]) else { continue };
+                    if v["k"].as_str() == Some("gate") {
+                        let Some(tk) = v["tk"].as_str() else { continue };
+                        let Some(mk) = markets.get_mut(tk) else { continue };
+                        let px = |x: &Value| x.as_f64().filter(|d| *d > 0.0 && *d < 1.0).map(|d| (d * PRICE_SCALE as f64).round() as i64);
+                        let g = (px(&v["bid"]), px(&v["ask"]), unix_us());
+                        beliefs += 1;
+                        if mk.gate.is_none_or(|o| (o.0, o.1) != (g.0, g.1)) {
+                            j.row("gate", json!({"tk": tk, "bid": g.0, "ask": g.1, "pb": v["pb"], "pa": v["pa"], "tau_us": v["tau_us"]}));
+                        }
+                        mk.gate = Some(g);
+                        dirty.push(tk.to_owned());
+                        continue;
+                    }
                     let (Some(tk), Some(i), Some(pr)) = (v["tk"].as_str(), v["i"].as_i64(), v["p"].as_f64()) else { continue };
                     let Some(mk) = markets.get_mut(tk) else { continue };
                     let t_i_us = (mk.open_ms / 1_000 + 5 * (i + 1)) * US;
@@ -546,7 +573,8 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                     let now = unix_us();
                     let healthy = (now - cb.last_recv_us) < p.max_cb_age_us
                         && markets.values().any(|m| m.book.is_some())
-                        && markets.values().any(|m| m.belief.as_ref().is_some_and(|b| now - b.t_i_us < p.max_belief_age_us));
+                        && markets.values().any(|m| if p.gate { m.gate.is_some_and(|g| now - g.2 < p.max_gate_age_us) }
+                            else { m.belief.as_ref().is_some_and(|b| now - b.t_i_us < p.max_belief_age_us) });
                     ever_healthy |= healthy;
                     let joins = own_joins.max(1) as f64;
                     j.row("equity", json!({"session_mtm_c": session, "cumulative_c": cumulative, "venue_c": venue, "healthy": healthy}));
@@ -633,7 +661,7 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                                 let px = parse_value(m.get("yes_price_dollars"), 1_000).unwrap_or(0);
                                 let qty = parse_value(m.get("count_fp"), SIZE_SCALE).unwrap_or(0) as f64 / SIZE_SCALE as f64;
                                 let side = if m["taker_side"].as_str() == Some("yes") { 1 } else { -1 };
-                                let _ = udp.send_to(json!({"k": "T", "tk": ticker, "ts_ms": now / 1_000, "px": px, "q": qty,
+                                let _ = udp.send_to(json!({"k": "T", "tk": ticker, "ts_ms": now / 1_000, "vt_us": vt, "px": px, "q": qty,
                                     "s": side, "id": m["trade_id"]}).to_string().as_bytes(), &p.sidecar_addr).await;
                                 continue;
                             }
@@ -714,7 +742,8 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                 // Inputs fresh? Anything stale -> no quote on either side.
                 let fresh = mk.book.is_some()
                     && now - cb.last_recv_us < p.max_cb_age_us
-                    && mk.belief.as_ref().is_some_and(|b| now - b.t_i_us < p.max_belief_age_us)
+                    && (if p.gate { mk.gate.is_some_and(|g| now - g.2 < p.max_gate_age_us) }
+                        else { mk.belief.as_ref().is_some_and(|b| now - b.t_i_us < p.max_belief_age_us) })
                     && mk.close_ms - now / 1_000 > p.stop_before_close_ms
                     && now >= group_tripped_until
                     && now >= mk.hold_until_us;
@@ -724,9 +753,14 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                     let book = mk.book.as_ref().unwrap();
                     let b = others_best(book, "yes", own(BID).map(|o| o.price), own(BID).map_or(0, |_| SIZE_SCALE));
                     let a = others_best(book, "no", own(ASK).map(|o| o.price), own(ASK).map_or(0, |_| SIZE_SCALE));
-                    let bl = mk.belief.as_ref().unwrap();
-                    p_now = match cb.last() { Some(s) => fast_p(bl.p, s, bl.s_ref, bl.sig, (mk.close_ms - now / 1_000) as f64 / 1_000.0), None => bl.p };
-                    (want_ask, want_bid) = targets(p_now, b, a, p.k_c);
+                    if p.gate {
+                        let g = mk.gate.unwrap();
+                        (want_ask, want_bid) = gate_targets(g.0, g.1, b, a);
+                    } else {
+                        let bl = mk.belief.as_ref().unwrap();
+                        p_now = match cb.last() { Some(s) => fast_p(bl.p, s, bl.s_ref, bl.sig, (mk.close_ms - now / 1_000) as f64 / 1_000.0), None => bl.p };
+                        (want_ask, want_bid) = targets(p_now, b, a, p.k_c);
+                    }
                     // cap: count every order on the growing side that could still fill
                     let live = |i: usize| orders.values().filter(|o| o.ticker == tk && o.side == i).count() as i64 * SIZE_SCALE;
                     let cur_counts = |i: usize| own(i).map_or(0, |_| SIZE_SCALE);
@@ -798,7 +832,7 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
         tokio::time::sleep(Duration::from_millis(500)).await;
         sweep(&http, &auth, &mut j, p.exchange_index).await;
         orders.clear();
-        for m in markets.values_mut() { m.slots = [None, None]; m.belief = None; m.pending.clear(); }
+        for m in markets.values_mut() { m.slots = [None, None]; m.belief = None; m.gate = None; m.pending.clear(); }
     }
 
     eprintln!("STOP: {stop_reason}. Cancelling everything.");
@@ -848,6 +882,18 @@ fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_never_improves_or_crosses_the_real_touch() {
+        let c = CENT;
+        // estimate above the real bid -> rests at the real bid; below -> keeps its own deeper price
+        assert_eq!(gate_targets(Some(45 * c), Some(52 * c), Some(44 * c), Some(55 * c)), (Some(55 * c), Some(44 * c)));
+        assert_eq!(gate_targets(Some(40 * c), Some(60 * c), Some(44 * c), Some(55 * c)), (Some(60 * c), Some(40 * c)));
+        // a side the gate declines stays empty
+        assert_eq!(gate_targets(None, Some(60 * c), Some(44 * c), Some(55 * c)), (Some(60 * c), None));
+        // no real book on a side: the gate's own price, still never crossing the other side
+        assert_eq!(gate_targets(Some(56 * c), None, None, Some(55 * c)), (None, None));
+    }
 
     #[test]
     fn inverse_normal_round_trips() {
