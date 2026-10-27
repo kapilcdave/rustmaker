@@ -93,6 +93,11 @@ pub struct Params {
 // ------------------------------------------------------------------------------- brain
 /// Gate mode: the sidecar's prices, never improving the others' REAL touch (the model scored an
 /// estimated touch; resting deeper is the conservative direction) and never crossing it.
+/// Trade price in tenths of a cent, the unit `kalshi_pull.pull_trades` stores (round(dollars * 1000)).
+fn trade_px_milli(v: Option<&Value>) -> Option<i64> {
+    parse_value(v, PRICE_SCALE).ok().map(|x| (x + 5) / 10)
+}
+
 fn gate_targets(bid: Option<i64>, ask: Option<i64>, b: Option<i64>, a: Option<i64>) -> (Option<i64>, Option<i64>) {
     let bid = bid.map(|x| b.map_or(x, |b| x.min(b))).filter(|&x| x >= CENT && a.is_none_or(|a| x < a));
     let ask = ask.map(|x| a.map_or(x, |a| x.max(a))).filter(|&x| x <= 99 * CENT && b.is_none_or(|b| x > b));
@@ -658,7 +663,8 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                             if kind == "trade" {
                                 let vt = m["ts_ms"].as_i64().map(|x| x * 1_000).or_else(|| m["ts"].as_i64().map(|x| x * US));
                                 j.row("T", json!([ticker, vt, now, m["taker_side"], m["yes_price_dollars"], m["count_fp"], m["trade_id"]]));
-                                let px = parse_value(m.get("yes_price_dollars"), 1_000).unwrap_or(0);
+                                // the WS sends 4 dp ("0.2100"); a 1_000 scale rejects that and sent every print as px 0
+                                let Some(px) = trade_px_milli(m.get("yes_price_dollars")) else { continue };
                                 let qty = parse_value(m.get("count_fp"), SIZE_SCALE).unwrap_or(0) as f64 / SIZE_SCALE as f64;
                                 let side = if m["taker_side"].as_str() == Some("yes") { 1 } else { -1 };
                                 let _ = udp.send_to(json!({"k": "T", "tk": ticker, "ts_ms": now / 1_000, "vt_us": vt, "px": px, "q": qty,
@@ -882,6 +888,14 @@ fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trade_px_reads_the_four_decimal_ws_price() {
+        assert_eq!(trade_px_milli(Some(&json!("0.2100"))), Some(210));
+        assert_eq!(trade_px_milli(Some(&json!("0.4550"))), Some(455));
+        assert_eq!(trade_px_milli(Some(&json!(0.99))), Some(990));
+        assert_eq!(trade_px_milli(None), None);
+    }
 
     #[test]
     fn gate_never_improves_or_crosses_the_real_touch() {
