@@ -205,6 +205,7 @@ async fn main() -> Result<()> {
                 preflight_only,
                 gate: args.iter().any(|a| a == "--gate"),
                 max_gate_age_us: (num("--max-gate-age-s", 1.0)? * 1e6) as i64,
+                maker_exit_c: flag("--maker-exit-c").map(|v| v.parse::<f64>()).transpose()?,
             };
             kapmm::run(load_auth()?, params).await.map(|_| ())
         }

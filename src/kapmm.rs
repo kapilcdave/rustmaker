@@ -88,12 +88,31 @@ pub struct Params {
     /// sidecar sends, per market and event, an absolute price per side or none; Kap beliefs unused.
     pub gate: bool,
     pub max_gate_age_us: i64,
+    /// rest the position-reducing side this many cents past break-even (maker, fee 0); None = off
+    pub maker_exit_c: Option<f64>,
 }
 
 // ------------------------------------------------------------------------------- brain
 /// Gate mode: the sidecar's prices, never improving the others' REAL touch (the model scored an
 /// estimated touch; resting deeper is the conservative direction) and never crossing it.
 /// Trade price in tenths of a cent, the unit `kalshi_pull.pull_trades` stores (round(dollars * 1000)).
+/// Maker take-profit: the reducing side `k_c` cents past the break-even YES price of the position
+/// opened since the market was last flat, on the cent grid, never crossing the others' touch.
+/// -> (ASK, px) to sell a long, (BID, px) to buy back a short; None when flat or out of range.
+fn maker_exit(mk: &Mkt, k_c: f64, b: Option<i64>, a: Option<i64>) -> Option<(usize, i64)> {
+    let n = mk.yes_ct - mk.no_ct;
+    if n.abs() < 0.5 { return None; }
+    // open P&L at YES price x: (flow - banked) + yes*x + no*(100 - x) = 0 at the break-even
+    let x_be = -(mk.flow_c - mk.banked_c + 100.0 * mk.no_ct) / n;
+    if n > 0.0 {
+        let px = ((x_be + k_c - 1e-9).ceil() as i64 * CENT).max(b.map_or(0, |b| b + CENT));
+        (px <= 99 * CENT).then_some((ASK, px))
+    } else {
+        let px = ((x_be - k_c + 1e-9).floor() as i64 * CENT).min(a.map_or(i64::MAX, |a| a - CENT));
+        (px >= CENT).then_some((BID, px))
+    }
+}
+
 fn trade_px_milli(v: Option<&Value>) -> Option<i64> {
     parse_value(v, PRICE_SCALE).ok().map(|x| (x + 5) / 10)
 }
@@ -772,6 +791,14 @@ pub async fn run(auth: Auth, p: Params) -> Result<String> {
                     let cur_counts = |i: usize| own(i).map_or(0, |_| SIZE_SCALE);
                     if mk.pos_fp + live(BID) - cur_counts(BID) + SIZE_SCALE > p.cap_fp { want_bid = None; }
                     if mk.pos_fp - live(ASK) + cur_counts(ASK) - SIZE_SCALE < -p.cap_fp { want_ask = None; }
+                    let known = ((mk.yes_ct - mk.no_ct) * SIZE_SCALE as f64).round() as i64 == mk.pos_fp;
+                    if let (Some(k), true) = (p.maker_exit_c, known) {
+                        match maker_exit(mk, k, b, a) {
+                            Some((ASK, px)) => want_ask = Some(px),
+                            Some((_, px)) => want_bid = Some(px),
+                            None => {}
+                        }
+                    }
                 }
                 if (want_ask, want_bid) != mk.last_target {
                     j.row("target", json!({"tk": tk, "p": p_now, "i": mk.belief.as_ref().map(|b| b.i),
@@ -888,6 +915,23 @@ fn spawn_cancel(http: &reqwest::Client, auth: &Arc<Auth>, tx: &mpsc::UnboundedSe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maker_exit_rests_k_past_break_even_without_crossing() {
+        let mut m = Mkt::default();
+        m.yes_ct = 1.0; m.flow_c = -40.0;                              // long 1 YES at 40c
+        assert_eq!(maker_exit(&m, 1.0, Some(38 * CENT), Some(41 * CENT)), Some((ASK, 41 * CENT)));
+        assert_eq!(maker_exit(&m, 1.0, Some(41 * CENT), Some(42 * CENT)), Some((ASK, 42 * CENT)));
+        let mut s = Mkt::default();
+        s.no_ct = 1.0; s.flow_c = -40.0;                               // sold 1 YES at 60c
+        assert_eq!(maker_exit(&s, 1.0, Some(55 * CENT), Some(62 * CENT)), Some((BID, 59 * CENT)));
+        assert_eq!(maker_exit(&s, 1.0, Some(55 * CENT), Some(59 * CENT)), Some((BID, 58 * CENT)));
+        let mut f = Mkt::default();
+        f.yes_ct = 2.0; f.no_ct = 2.0; f.flow_c = -195.0; f.banked_c = 5.0;
+        assert_eq!(maker_exit(&f, 1.0, None, None), None);             // flat
+        f.yes_ct = 3.0; f.flow_c = -245.0;                             // then long 1 at 50c
+        assert_eq!(maker_exit(&f, 1.0, None, None), Some((ASK, 51 * CENT)));
+    }
 
     #[test]
     fn trade_px_reads_the_four_decimal_ws_price() {
