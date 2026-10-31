@@ -6,6 +6,7 @@
 //! All reaction-window statistics are gaps between two messages on OUR receive clock, so
 //! they need no clock agreement with the venue. Only `feed_age_ms` compares clocks.
 
+mod altspot;
 mod auth;
 mod book;
 mod latency;
@@ -265,6 +266,27 @@ async fn main() -> Result<()> {
             // A loss-cap stop must not be restarted by a supervisor (systemd RestartPreventExitStatus=3).
             if reason.contains("loss cap") { eprintln!("exit 3: {reason}"); std::process::exit(3); }
             Ok(())
+        }
+        Some("altspot") => {
+            // Thin-altcoin spot-gap taker. ARMED needs the explicit flag, like `live`.
+            let dry = args.iter().any(|a| a == "--dry-run");
+            if !dry && !args.iter().any(|a| a == "--armed") {
+                bail!("altspot places REAL orders; pass --armed to confirm (or --dry-run to send nothing)");
+            }
+            let num = |name: &str, default: f64| flag(name).map_or(Ok(default), |v| v.parse::<f64>());
+            let params = altspot::Params {
+                assets: flag("--assets").unwrap_or_else(|| "NEAR,ZEC,HYPE".into()).split(',').map(str::to_owned).collect(),
+                minutes: num("--minutes", 60.0)? as u64,
+                dry,
+                edge: num("--edge", 0.10)?,
+                count: num("--count", 1.0)?,
+                max_risk_c: num("--max-risk-c", 500.0)?,
+                max_lag_s: num("--max-lag-s", 15.0)? as i64,
+                exchange_index: num("--exchange-index", 2.0)? as i64,
+                out: flag("--out").unwrap_or_else(|| "data/altspot".into()),
+                min_balance_c: num("--min-balance-c", 0.0)?,
+            };
+            altspot::run(load_auth()?, client()?, params).await
         }
         Some("balance") => {
             // Read-only: per-shard cash, open positions, resting orders.
